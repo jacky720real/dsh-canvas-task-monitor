@@ -56,7 +56,7 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
   重要度锚点：`0` 纯通知 → `1` 选修低权重 → `2` 一般作业 → `3` 占比 ≥10% 或期中 → `4` 占比 ≥20% 或期末/答辩 → `5` 硬性门槛。
   分类只允许 `assignment` / `activity` / `reminder`，标签只允许 `exam, paper, project, quiz, discussion, rule, deadline_change, group, reading, admin`（最多 5 个），越界一律丢弃。
 - **内容判定会覆盖来源兜底**（公告与邮件；作业类仍以 Canvas 自己的数据为准）：先看正文再定类别与上限——「成绩已发布 / grades have been released / 答案已上传 / 无需操作」这类**信息型通知** → 提醒（重要度封顶 1）；报名/登记/招募 → 提醒；（活动 + 报名）→ 活动；讲座、研讨会、工作坊、比赛、锦标赛、招募 → 活动。「报名成功 / 已为您预留 / registration confirmed」→ 活动，重要度抬 1。命中上限时会**连同按关键词堆起来的理由一起丢掉**，不会出现「信息型公告」旁边还写着「考试/测验类」这种自相矛盾。
-- **不计入总成绩的测验会降权**：`omit_from_final_grade: true`、`grading_type: not_graded`、或分值为 `0` 的作业直接压到重要度 **1**，不再按关键词里的 `quiz/exam` 抬分（成绩公告里的 `quiz` 同理）。
+- **不计入总成绩的测验会降权**：`omit_from_final_grade: true` 或 `grading_type: not_graded` → 重要度压到 **1**，不再按关键词里的 `quiz/exam` 抬分（成绩公告里的 `quiz` 同理）。**「0 分」不等于「不计入总成绩」**：0 分但命中硬性要求（`required` / `必修` / `必须完成`…）的条目——CityU 那种 0 分的奖学金申请、必修表格——仍按硬性门槛算 5，只有「0 分且不构成硬性要求」才降权，理由也会分别写成「不计入总成绩」和「无分值（0 分且非硬性要求）」。
 - **截止时间怎么判**：邮件先剥掉转发头（发件人/发送时间/收件人/主题）、`>` 引用块和签名——转发头里的「发送时间」不是截止时间；只有紧挨着「截止 / 截止时间 / 到期 / 交 / 提交 / ddl / due / deadline / by / before / no later than」这类词的日期才算 **`deadline`**，没有截止词的日期退化成 **`event`**（活动时间，不算逾期）；早于收信/发布时间 12 小时以上的日期直接丢弃（`dropped`）。
 - **判定版本**：库里的 `assess_revision` 记录判定逻辑版本，本版是 **`2`**。升级后**下一轮拉取会把回看窗口内的素材整体重算一次**（即使哈希没变，这一轮才允许调用 AI），之后恢复「没变更就不调 AI」。
 - AI 与规则都可用时：AI 的返回值只在**字段非空**时覆盖规则结果（`due_at` 另有一套护栏：AI 说「没有截止时间」就能清掉规则从转发头里误抓的日期，反过来 AI 编的时间若早于收信时间会被丢掉，Canvas 自己给的截止时间永远不许改）。AI 挂了整轮降级为规则结果，不会因为没有 AI 就不出任务。
@@ -211,7 +211,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
 
-当前项数：`manifest-check` 48 / `host-check` 52 / `canvas-check` 77 / `client-check` 116 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
+当前项数：`manifest-check` 48 / `host-check` 54 / `canvas-check` 77 / `client-check` 116 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
 
 本版这四条判定修正（转发头时间不是截止时间、分类按内容、不计入总成绩降权、每轮完成对账）**每条都做过伪造对照**：把修复逐项回退到旧行为后，对应断言必须变红——例如关掉「变更门禁之外的完成对账」就报 `pipeline: 只有提交状态变了（哈希不变）也会自动勾掉 → 期望 1，实际 0`；不剥转发头就报 `转发头的发送时间不得成为截止时间：2026-09-25T06:11:00.000Z`；关掉内容分类就报 `期望 "reminder"，实际 "activity"`；关掉降权就报 `期望 1，实际 4`；客户端丢掉 `due_kind` 则三条活动渲染断言一起变红。改这些逻辑前请先跑一遍这套对照。
 

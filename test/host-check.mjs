@@ -357,6 +357,7 @@ check('scoring: 成绩已发布的公告按内容归为提醒，不再"重要"',
   eq(draft.importance, 1, '成绩已发布不需要动作');
   assert(draft.importance_reason.includes('信息型公告'), draft.importance_reason);
   assert(!draft.importance_reason.includes('考试/测验类'), `理由不能自相矛盾：${draft.importance_reason}`);
+  eq(draft.tags.length, 0, '信息型公告不该再挂着 exam 这类"要动手"的标签');
 });
 
 check('scoring: 不计入总成绩的测验不再按"考试"抬分', () => {
@@ -382,6 +383,54 @@ check('scoring: 不计入总成绩的测验不再按"考试"抬分', () => {
   eq(draft.importance, 1, '不计入总成绩 → 重要度压到 1');
   assert(draft.importance_reason.includes('不计入总成绩'), draft.importance_reason);
   assert(draft.score < 40, `不该是高优先级：${draft.score}`);
+});
+
+check('scoring: 0 分的硬性要求（奖学金申请/必修）不因"0 分"降权', () => {
+  // 真机上这类条目（CityU 的 0 分奖学金申请）曾被抓成 notGraded 掉到重要度 1。
+  const draft = ruleAssess(
+    {
+      source: 'canvas_assignment',
+      external_id: 'course:2:assignment:88',
+      course_id: '2',
+      payload: {
+        name: 'Fang Brothers Whole Person Development Scholarship',
+        description: '<p>Applicants are required to complete this form and upload supporting documents.</p>',
+        due_at: iso(nowMs + 5 * DAY),
+        points_possible: 0,
+        submission_types: ['online_upload'],
+        grading_type: 'points',
+        omit_from_final_grade: false,
+        course_name: 'Course B',
+      },
+    },
+    { nowMs, weights: { urgencyWeight: 10, importanceWeight: 8 } },
+  );
+  eq(draft.importance, 5, '硬性要求仍按 5 计（0 分不等于不计入总成绩）');
+  assert(draft.importance_reason.includes('硬性要求'), draft.importance_reason);
+  assert(!draft.importance_reason.includes('无分值'), `不该按无分值处理：${draft.importance_reason}`);
+});
+
+check('scoring: 0 分且非硬性要求的条目降权，并写明是"无分值"', () => {
+  const draft = ruleAssess(
+    {
+      source: 'canvas_assignment',
+      external_id: 'course:2:assignment:89',
+      course_id: '2',
+      payload: {
+        name: 'Sample',
+        description: '<p>A sample submission for reference.</p>',
+        points_possible: 0,
+        submission_types: ['online_upload'],
+        grading_type: 'points',
+        omit_from_final_grade: false,
+        course_name: 'Course B',
+      },
+    },
+    { nowMs, weights: { urgencyWeight: 10, importanceWeight: 8 } },
+  );
+  eq(draft.importance, 1, '0 分且没有硬性要求 → 压到 1');
+  assert(draft.importance_reason.includes('无分值'), draft.importance_reason);
+  assert(!draft.importance_reason.includes('不计入总成绩'), `没被显式标注就别断言不计入总成绩：${draft.importance_reason}`);
 });
 
 check('scoring: "报名成功"的邮件按内容归为活动', () => {
