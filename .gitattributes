@@ -1,0 +1,2 @@
+# 仓库内统一 LF：全部自测都是在 LF 下跑绿的（.bat 用 LF 也已验证 cmd 可正常执行）。
+* text=auto eol=lf

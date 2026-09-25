@@ -1,0 +1,26 @@
+# 依赖与构建产物
+node_modules/
+*.log
+
+# 本机数据（插件运行时写在 DSH_HOME 下，正常不会出现在仓库里；
+# 万一通过调试开关把数据目录指到仓库内，也不要提交）
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+config.local.json
+
+# 本机安装/回滚脚本产生的快照
+.dsh-ctm-snapshot/
+
+# 开发期间的临时探针脚本（下划线前缀，不属于交付物）
+test/_*.mjs
+/_*.mjs
+/_*.js
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

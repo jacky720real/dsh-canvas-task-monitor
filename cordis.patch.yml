@@ -1,0 +1,10 @@
+# dsh-canvas-task-monitor —— DSH Bundle patch
+# 作为 bundle 合入 profile 时，自动插入本插件行。
+#
+# 宿主半区（lib/index.js）自己完成全部业务：读取自己的配置、拉取 Canvas（可选邮箱）、
+# 评分、写入自己的 SQLite 库，并在 DSH 自带的 webServer 上挂同源路由
+# /canvas-task-monitor/api 供浏览器半区（lib/client.js）调用。
+# 因此这里不需要任何 config：数据目录由插件自己决定（见 README「配置与数据」）。
+- insert:
+    - id: canvas-task-monitor
+      name: 'dsh-canvas-task-monitor'
