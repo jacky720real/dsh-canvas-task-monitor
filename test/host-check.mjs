@@ -12,9 +12,9 @@ import { join } from 'node:path';
 import { defaultConfig, loadConfig, maskSecrets, mergeSecrets, normalizeConfig, saveConfig, resolveDataDir, validateConfig, SECRET_PATHS, SAVED_SECRET, dbPathIn } from '../lib/config.js';
 import { openStore, isAvailable as sqliteAvailable } from '../lib/store.js';
 import { isTrustedWebRequest, createHandlers, Runtime, toPublicTask } from '../lib/index.js';
-import { HASH_FIELDS, detectChanges, hashItem, mergeDraft, pollOnce, submissionVerdict, syncCompletions, testSource } from '../lib/pipeline.js';
-import { computeScore, ruleAssess, sortTasks, urgencyFromDue, extractDueDate, analyzeDueDate, stripQuotedText, classifyByContent, isRegistrationConfirmation, stripHtml, HIGH_URGENCY, HIGH_IMPORTANCE, TAG_WHITELIST } from '../lib/scoring.js';
-import { aiConfigured, buildSystemPrompt, buildUserPrompt, callChat, extractTasks, sanitizeDraft, scoreItems, testAi, stripCodeFence } from '../lib/llm.js';
+import { HASH_FIELDS, detectChanges, hashItem, mergeDraft, pollOnce, snapshotToItem, submissionVerdict, syncCompletions, testSource } from '../lib/pipeline.js';
+import { computeScore, examEvidence, matchesAny, ruleAssess, sortTasks, urgencyFromDue, extractDueDate, analyzeDueDate, stripQuotedText, classifyByContent, isRegistrationConfirmation, stripHtml, HIGH_URGENCY, HIGH_IMPORTANCE, TAG_WHITELIST } from '../lib/scoring.js';
+import { aiConfigured, batchSizeForBudget, buildSystemPrompt, buildUserPrompt, callChat, extractTasks, sanitizeDraft, scoreItems, testAi, stripCodeFence } from '../lib/llm.js';
 import { canonicalHash, parseDateMs, utcNowIso, truncate } from '../lib/util.js';
 
 let passed = 0;
@@ -450,6 +450,71 @@ check('scoring: 已经过去的活动排到"无时间"那组', () => {
   deepEq(sortTasks(rows).map((row) => row.id), [3, 2, 1], '未来活动按时间；过去活动排最后');
 });
 
+check('scoring: 词边界 —— latest 不命中 test、non-final 不命中 final', () => {
+  eq(matchesAny('please read the latest news', ['test']), false, '子串不算');
+  eq(matchesAny('non-final year undergraduates', ['final']), false, '连字符里的 final 不算');
+  eq(matchesAny('English tests are required', ['test']), true, '复数形式算');
+  eq(matchesAny('考试安排如下', ['考试']), true, '中文仍然是子串匹配');
+});
+
+check('scoring: 申请资格里的 exam/test 不算考试（奖学金公告实测）', () => {
+  const announcement = {
+    source: 'canvas_announcement',
+    external_id: 'course:1:announcement:8',
+    payload: {
+      title: 'Innovation and Technology Scholarship 2024',
+      message: '<p>Open to non-final year undergraduates. HKDSE English Language Exam - Level 4 or above. '
+        + 'Applicants must meet the eligibility criteria and submit English test results.</p>',
+      posted_at: iso(nowMs - DAY),
+    },
+  };
+  const draft = ruleAssess(announcement, { nowMs });
+  eq(examEvidence('Innovation and Technology Scholarship 2024', stripHtml(announcement.payload.message)).hit, false, '没有考试证据');
+  assert(!draft.tags.includes('exam'), `不该有 exam 标签（实际 ${JSON.stringify(draft.tags)}）`);
+  assert(!draft.importance_reason.includes('考试'), `不该按考试抬分（实际 ${draft.importance_reason}）`);
+  assert(draft.importance < 4, `重要度不得被抬到 4（实际 ${draft.importance}）`);
+
+  // 真的考试仍然要认出来
+  eq(examEvidence('Quiz 3', '成绩已发布').hit, true, '标题里的 quiz');
+  eq(examEvidence('Final Exam', '').hit, true, '标题里的 exam');
+  eq(examEvidence('MA1508', 'The final exam counts for 60% of your final grade.').hit, true, 'final exam 搭配');
+  eq(examEvidence('MA1508', 'This course is not counted in your final grade.').hit, false, '只有 final grade 不算考试');
+  eq(examEvidence('Notice', 'We will hold a quiz next week.').hit, true, '正文里的 quiz');
+  eq(examEvidence('Notice', 'Candidates should have at least 2 years of work experience and pass a written exam.').hit, false, '招聘/申请语境');
+});
+
+check('scoring: 素材里写明"不计入总成绩"也要降权（并说明来源）', () => {
+  const work = {
+    source: 'canvas_assignment',
+    external_id: 'course:1:assignment:47',
+    payload: {
+      name: 'WebWork_1',
+      description: '<p>This assignment is <b>not counted in the final grade</b>. Just practice.</p>',
+      due_at: iso(nowMs + DAY),
+      points_possible: 50,
+      submission_types: ['online_upload'],
+    },
+  };
+  const draft = ruleAssess(work, { nowMs });
+  eq(draft.importance, 1, '正文写了不计入 → 压到 1');
+  assert(draft.importance_reason.includes('素材里写明不计入总成绩'), `要说清依据（实际 ${draft.importance_reason}）`);
+  // 硬性要求里的"不计入"措辞不得把必做项压掉
+  const mandatory = {
+    source: 'canvas_assignment',
+    external_id: 'course:1:assignment:48',
+    payload: {
+      name: '必修实验：安全培训',
+      description: '必须完成，不通过不能进实验室。作业本身 not counted in the final grade，但属于 required gate。',
+      due_at: iso(nowMs + DAY),
+      points_possible: 0,
+      submission_types: ['online_upload'],
+    },
+  };
+  const required = ruleAssess(mandatory, { nowMs });
+  eq(required.importance, 5, '硬性要求优先');
+  assert(required.importance_reason.includes('硬性要求'), `理由要有硬性要求（实际 ${required.importance_reason}）`);
+});
+
 /* ------------------------------------------------------------ llm */
 
 const aiConfig = normalizeConfig({ ai: { enabled: true, baseUrl: 'https://ai.test/v1', apiKey: 'k', model: 'm', batchSize: 5 } }).ai;
@@ -575,6 +640,98 @@ await checkAsync('llm: testAi 翻译 401/403/404', async () => {
   eq(okResult.ok, true, '正常');
 });
 
+/* --------------------------- AI 输出预算（推理型模型：真机实测的 content 为空） --------------------------- */
+
+/** 真机形状：推理型模型把预算全花在 reasoning_content 上，content 是空的、finish_reason=length。 */
+function reasoningTruncatedResponse() {
+  return jsonResponse({
+    choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: '想'.repeat(400) } }],
+  });
+}
+
+check('llm: 批次大小按输出预算反推（4000 预算只敢塞 2 条）', () => {
+  eq(batchSizeForBudget({ maxOutputTokens: 4000 }, 15), 2, '4000 → 2 条');
+  eq(batchSizeForBudget({ maxOutputTokens: 8000 }, 15), 5, '8000 → 5 条');
+  eq(batchSizeForBudget({ maxOutputTokens: 8000 }, 3), 3, '配置更小就听配置的');
+  eq(batchSizeForBudget({ maxOutputTokens: 1200 }, 15), 1, '预算很小也要至少 1 条');
+});
+
+await checkAsync('llm: max_tokens 走 ai.maxOutputTokens（默认 8000）', async () => {
+  const bodies = [];
+  const fetchImpl = async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return jsonResponse({ choices: [{ finish_reason: 'stop', message: { content: '{"tasks":[]}' } }] });
+  };
+  await callChat(aiConfig, [{ role: 'user', content: 'x' }], { fetchImpl, sleep: async () => {} });
+  eq(bodies[0].max_tokens, 8000, '默认预算 8000（4000 会被推理吃光）');
+  await callChat({ ...aiConfig, maxOutputTokens: 12000 }, [{ role: 'user', content: 'x' }], { fetchImpl, sleep: async () => {} });
+  eq(bodies[1].max_tokens, 12000, '用户配了就用用户的');
+});
+
+await checkAsync('llm: 输出被推理吃光时自动拆小批重试，而不是整批放弃', async () => {
+  const items = [1, 2, 3, 4, 5, 6].map((n) => ({ source: 'mail', external_id: `graph:${n}`, change_type: 'new', course_id: null, payload: { subject: `s${n}` } }));
+  let calls = 0;
+  const result = await scoreItems(items, aiConfig, {
+    weights: {},
+    sleep: async () => {},
+    fetchImpl: async (url, init) => {
+      calls += 1;
+      const body = JSON.parse(init.body);
+      const ids = [...String(body.messages[1].content).matchAll(/graph:(\d+)/g)].map((match) => match[1]);
+      // 真机行为：素材一多，推理就把预算吃光 → content 为空
+      if (ids.length > 2) return reasoningTruncatedResponse();
+      return jsonResponse({
+        choices: [{
+          finish_reason: 'stop',
+          message: {
+            content: JSON.stringify({
+              tasks: ids.map((id) => ({
+                source: 'mail', external_id: `graph:${id}`, category: 'reminder', title: `T${id}`, summary: 'S',
+                course: '', due_at: null, urgency: 1, importance: 1, urgency_reason: 'u', importance_reason: 'i',
+                tags: [], is_rule: false,
+              })),
+            }),
+          },
+        }],
+      });
+    },
+  });
+  eq(result.ok, true, '拆批之后全部成功');
+  eq(result.settled.size, 6, '6 条素材都要有明确结论');
+  eq(result.drafts.size, 6, '6 条草稿');
+  assert(result.errors.some((text) => text.includes('输出被截断，已自动拆成')), '要说明拆了批');
+  assert(calls > 2, `拆批会多发几次请求（实际 ${calls} 次）`);
+  eq(result.drafts.get('mail\u0000graph:6').title, 'T6', '拆分后每条都拿到了结果');
+});
+
+await checkAsync('llm: 单条素材也被吃光时不再无脑重试，提示怎么调', async () => {
+  const items = [{ source: 'mail', external_id: 'graph:1', change_type: 'new', course_id: null, payload: {} }];
+  let calls = 0;
+  const result = await scoreItems(items, { ...aiConfig, maxOutputTokens: 4000 }, {
+    weights: {},
+    sleep: async () => {},
+    fetchImpl: async () => {
+      calls += 1;
+      return reasoningTruncatedResponse();
+    },
+  });
+  eq(calls, 1, '推理吃光预算重试没有意义，只发一次');
+  eq(result.ok, false, 'ok=false');
+  eq(result.settled.size, 0, '不算 settled，下轮还能再试');
+  assert(result.errors.some((text) => text.includes('推理') && text.includes('maxOutputTokens')), '要给出可操作的提示');
+});
+
+await checkAsync('llm: 返回的不是合法 JSON 时不算 settled（下轮还有机会）', async () => {
+  const items = [{ source: 'mail', external_id: 'graph:1', change_type: 'new', course_id: null, payload: {} }];
+  const result = await scoreItems(items, aiConfig, {
+    weights: {},
+    sleep: async () => {},
+    fetchImpl: async () => jsonResponse({ choices: [{ finish_reason: 'length', message: { content: '{"tasks":[{"source":"mail"' } }] }),
+  });
+  eq(result.settled.size, 0, '解析失败不得写快照（否则这批素材永远不会再评）');
+  assert(result.errors.some((text) => text.includes('合法 JSON')), '要报告 JSON 不合法');
+});
+
 /* ------------------------------------------------------------ store */
 
 await checkAsync('store: status 归用户，created_at 只写一次', async () => {
@@ -698,6 +855,48 @@ check('pipeline: mergeDraft 保留规则字段，AI 空串不覆盖', () => {
   deepEq(merged.tags, ['reading'], 'AI 空 tags 不得清空规则标签');
   eq(merged.ai_scored, true, '标记已 AI 评分');
   eq(mergeDraft(rule, null).ai_scored, false, '没有 AI 结果时标记 false');
+});
+check('pipeline: 内容判定的降级不接受 AI 抬回去（成绩公告 / 不计分）', () => {
+  // 真机形状：Quiz 3 Grades 是"成绩已发布"的信息型公告
+  const infoRule = ruleAssess({
+    source: 'canvas_announcement',
+    external_id: 'course:70800:announcement:635075',
+    payload: {
+      title: 'Quiz 3 Grades',
+      message: '<p>The grades of Quiz 3 have been released. The solution is in the files.</p>',
+      posted_at: iso(nowMs - 3 * DAY),
+      course_name: 'GE1362',
+    },
+  }, { nowMs });
+  eq(infoRule.category, 'reminder', '规则先判成提醒');
+  eq(infoRule.lock_importance, 1, '被内容降过级 → 上限锁 1');
+  const hostile = { category: 'activity', importance: 4, tags: ['exam'], importance_reason: '考试/测验类', urgency: 0 };
+  const merged = mergeDraft(infoRule, hostile);
+  eq(merged.category, 'reminder', 'AI 不许把它改成活动');
+  eq(merged.importance, 1, 'AI 不许把重要度抬回 4');
+  deepEq(merged.tags, [], 'AI 不许把 exam 标签加回来');
+  assert(!merged.importance_reason.includes('考试'), `理由不能自相矛盾（实际 ${merged.importance_reason}）`);
+  eq(mergeDraft(infoRule, { importance: 0 }).importance, 0, 'AI 仍可以继续往下调');
+
+  // 不计入总成绩的作业同样上锁（正文写明 not counted in the final grade）
+  const practiceRule = ruleAssess({
+    source: 'canvas_assignment',
+    external_id: 'course:1:assignment:47',
+    payload: { name: 'WebWork_1', description: '<p>Not counted in the final grade.</p>', points_possible: 100, submission_types: ['external_tool'] },
+  }, { nowMs });
+  eq(practiceRule.lock_importance, 1, '不计分的作业锁 1');
+  const practiceMerged = mergeDraft(practiceRule, { importance: 4, importance_reason: '考试/测验类' });
+  eq(practiceMerged.importance, 1, 'AI 不许抬回去');
+  eq(practiceMerged.importance_reason, practiceRule.importance_reason, '数字被压回来时理由也用规则的');
+
+  // 没被内容降过级的普通条目不上锁，AI 照旧说了算
+  const plainRule = ruleAssess({
+    source: 'canvas_assignment',
+    external_id: 'course:1:assignment:11',
+    payload: { name: 'Essay 1', description: '<p>Write a long essay</p>', due_at: iso(nowMs + 2 * DAY), points_possible: 100, submission_types: ['online_upload'] },
+  }, { nowMs });
+  eq(plainRule.lock_importance, null, '普通作业不锁');
+  eq(mergeDraft(plainRule, { importance: 5 }).importance, 5, 'AI 照旧可以调普通条目');
 });
 check('pipeline: Canvas 的权威 due_at 不接受 AI 覆盖，邮箱仍由 AI 决定截止时间', () => {
   const canvasRule = {
@@ -848,6 +1047,81 @@ check('pipeline: 邮件"报名成功"把旧报名提醒升级成参加，并勾�
   eq(again.promoted, 0, '已经升过级就不再动');
   eq(again.completed, 0, '已经勾过就不再计数');
   eq(store.getTaskByKey('mail', 'imap:recruit').title, '参加：Hall 10 ICFD 篮球招募活动', '标题不会被叠加前缀');
+});
+
+/* ------------------------------------------- 判定升级时重算窗口外的老素材 */
+
+check('pipeline: 快照能还原出素材类型（快照 source 只有 canvas/mail）', () => {
+  eq(snapshotToItem('canvas', { external_id: 'course:1:assignment:5' }).source, 'canvas_assignment', '作业');
+  eq(snapshotToItem('canvas', { external_id: 'course:1:announcement:16' }).source, 'canvas_announcement', '公告');
+  eq(snapshotToItem('mail', { external_id: 'imap:x' }).source, 'mail', '邮件');
+  eq(snapshotToItem('canvas', { external_id: '' }), null, '没有 external_id 的坏快照直接跳过');
+});
+
+await checkAsync('pipeline: 判定版本升级时，已经落在窗口外的老素材也会重算', async () => {
+  const dir = join(root, 'store-rescore');
+  const store = openStore(dbPathIn(dir));
+  // 用户真机形状：#16 公告发布于 30 天前（窗口只有 3 天），所以重新拉取永远看不到它
+  store.upsertSnapshots('canvas', [{
+    external_id: 'course:1:announcement:16',
+    course_id: '1',
+    content_hash: 'hash16',
+    payload: {
+      title: 'Quiz 3 Grades',
+      message: '<p>The grades of Quiz 3 have been released on canvas. The solution is in the files.</p>',
+      posted_at: iso(nowMs - 30 * DAY),
+      course_name: 'GE1362',
+    },
+  }]);
+  // 升级前的旧判定：activity / 重要 4 / tags [exam]
+  store.upsertTask({
+    source: 'canvas_announcement',
+    external_id: 'course:1:announcement:16',
+    category: 'activity',
+    title: 'Quiz 3 Grades',
+    summary: '成绩已发布',
+    course: 'GE1362',
+    due_at: null,
+    due_kind: '',
+    urgency: 0,
+    importance: 4,
+    score: 32,
+    tags: ['exam'],
+    is_rule: false,
+    urgency_reason: '没有明确截止时间',
+    importance_reason: '考试/测验类',
+    status: 'pending',
+    raw_json: '',
+  });
+
+  // 窗口内**同时**还有一条新公告：真机上 Canvas 有新公告时 changes 就是非空的，
+  // 如果重算只在"这一轮零变更"时才做，窗口外那条老素材会被整个漏掉（E2E 踩过）。
+  const state = baseState({
+    assignments: { 1: [], 2: [] },
+    announcements: {
+      1: [{ id: 99, title: 'Week 5 讲义已上传', message: '<p>Slides are in the files.</p>', posted_at: iso(nowMs - 3_600_000) }],
+      2: [],
+    },
+  });
+  const stats = await pollOnce({
+    dataDir: dir,
+    config: normalizeConfig({ canvas: { enabled: true, baseUrl: 'https://canvas.test', token: 't', lookbackDays: 3 } }),
+    store,
+    fetchImpl: makeFetch(state),
+    sleep: async () => {},
+    logger: null,
+    nowMs,
+  });
+  eq(stats.changes, 1, '窗口内只有那条新公告算"更新"');
+  eq(stats.rescored, 2, '新公告 + 窗口外的老素材都被重算');
+  const row = store.getTaskByKey('canvas_announcement', 'course:1:announcement:16');
+  eq(row.category, 'reminder', '成绩发布公告改成提醒');
+  eq(row.importance, 1, '重要度压到 1');
+  deepEq(row.tags, [], 'exam 标签被去掉');
+  assert(row.importance_reason.includes('信息型公告'), `理由要说明是信息型（实际 ${row.importance_reason}）`);
+  eq(row.status, 'pending', '重算绝不改用户的状态');
+  eq(store.getMeta('assess_revision'), '2', '重算完成后记下判定版本，不会每轮都重算');
+  store.close();
 });
 
 /* ------------------------------------------------------------ index action 层 */

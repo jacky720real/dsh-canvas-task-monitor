@@ -46,6 +46,7 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
 ## 3. 评分怎么算
 
 - **规则评分**（本地、离线、永远先跑）：从文本里提取截止时间，按锚点给紧急度，再按关键词（考试、论文、项目、演示、报名、硬性门槛…）给重要度。完全不联网。Canvas 的截止时间由源直接给出，规则评分只做规范化。
+- **关键词按词边界匹配**：英文关键词不再是「包含即命中」——`latest` 不再命中 `test`、`non-final year` 不再命中 `final`；而 `exam` / `test` 这类词还要看**语境**：只有出现在**申请资格**里的（`eligibility criteria` / `requirements` / `HKDSE` / `TOEFL` / `public exams` / `at least level N`…）不算考试——CityU 那种奖学金公告里的「HKDSE English Language Exam」过去被当成「考试/测验类」抬到重要度 4，现在不会了；标题里命中一定算，正文里命中才要过语境；`final` 只在 `final exam/test/quiz/paper/project/report/presentation/assessment` 这种搭配里算考试（`final grade` 说的是成绩）。
 - **AI 评分**（`ai.enabled`，默认关）：只对**发生变更**的素材调用一次；模型给出的原始 `score` 会被丢弃并由本插件按公式重算：
 
   ```
@@ -56,10 +57,12 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
   重要度锚点：`0` 纯通知 → `1` 选修低权重 → `2` 一般作业 → `3` 占比 ≥10% 或期中 → `4` 占比 ≥20% 或期末/答辩 → `5` 硬性门槛。
   分类只允许 `assignment` / `activity` / `reminder`，标签只允许 `exam, paper, project, quiz, discussion, rule, deadline_change, group, reading, admin`（最多 5 个），越界一律丢弃。
 - **内容判定会覆盖来源兜底**（公告与邮件；作业类仍以 Canvas 自己的数据为准）：先看正文再定类别与上限——「成绩已发布 / grades have been released / 答案已上传 / 无需操作」这类**信息型通知** → 提醒（重要度封顶 1）；报名/登记/招募 → 提醒；（活动 + 报名）→ 活动；讲座、研讨会、工作坊、比赛、锦标赛、招募 → 活动。「报名成功 / 已为您预留 / registration confirmed」→ 活动，重要度抬 1。命中上限时会**连同按关键词堆起来的理由一起丢掉**，不会出现「信息型公告」旁边还写着「考试/测验类」这种自相矛盾。
-- **不计入总成绩的测验会降权**：`omit_from_final_grade: true` 或 `grading_type: not_graded` → 重要度压到 **1**，不再按关键词里的 `quiz/exam` 抬分（成绩公告里的 `quiz` 同理）。**「0 分」不等于「不计入总成绩」**：0 分但命中硬性要求（`required` / `必修` / `必须完成`…）的条目——CityU 那种 0 分的奖学金申请、必修表格——仍按硬性门槛算 5，只有「0 分且不构成硬性要求」才降权，理由也会分别写成「不计入总成绩」和「无分值（0 分且非硬性要求）」。
+- **不计入总成绩的测验会降权**：`omit_from_final_grade: true` 或 `grading_type: not_graded`，以及**正文里写明**「不计入总成绩 / not counted in the final grade / for practice only」→ 重要度压到 **1**，不再按关键词里的 `quiz/exam` 抬分（成绩公告里的 `quiz` 同理），而且**不会**在「信息型通知」上留下 `exam` / `paper` 这种行动标签。**「0 分」不等于「不计入总成绩」**：0 分但命中硬性要求（`required` / `必修` / `必须完成`…）的条目——CityU 那种 0 分的奖学金申请、必修表格——仍按硬性门槛算 5，只有「0 分且不构成硬性要求」才降权，理由也会分别写成「不计入总成绩」「素材里写明不计入总成绩」「无分值（0 分且非硬性要求）」。
 - **截止时间怎么判**：邮件先剥掉转发头（发件人/发送时间/收件人/主题）、`>` 引用块和签名——转发头里的「发送时间」不是截止时间；只有紧挨着「截止 / 截止时间 / 到期 / 交 / 提交 / ddl / due / deadline / by / before / no later than」这类词的日期才算 **`deadline`**，没有截止词的日期退化成 **`event`**（活动时间，不算逾期）；早于收信/发布时间 12 小时以上的日期直接丢弃（`dropped`）。
-- **判定版本**：库里的 `assess_revision` 记录判定逻辑版本，本版是 **`2`**。升级后**下一轮拉取会把回看窗口内的素材整体重算一次**（即使哈希没变，这一轮才允许调用 AI），之后恢复「没变更就不调 AI」。
-- AI 与规则都可用时：AI 的返回值只在**字段非空**时覆盖规则结果（`due_at` 另有一套护栏：AI 说「没有截止时间」就能清掉规则从转发头里误抓的日期，反过来 AI 编的时间若早于收信时间会被丢掉，Canvas 自己给的截止时间永远不许改）。AI 挂了整轮降级为规则结果，不会因为没有 AI 就不出任务。
+- **判定版本**：库里的 `assess_revision` 记录判定逻辑版本，本版是 **`2`**。升级后**下一轮拉取会把素材整体重算一次**——窗口里抓到的**全部**素材（即使哈希没变，这一轮才允许调用 AI）**加上**回看窗口之外的老素材（由 `snapshots` 表还原，`raw_json` 不存正文），否则像「30 天前发布的成绩公告」这种永远走不到窗口里、也就永远修不掉。之后恢复「没变更就不调 AI」。
+- **AI 不许推翻内容判定**：素材里写着「成绩已发布 / 不计入总成绩」这类事实时，规则给出的分类与降级后的重要度会**上锁**——AI 可以继续往下调，但不能把它抬回「活动 / 重要 4」（真机实测：`Quiz 3 Grades` 被规则判成「提醒 / 重要 1」，模型看到标题里的 Quiz 又抬了回去，用户投诉的就是这个）。锁只在规则**确实按内容降过级**时生效，普通条目的分类与重要度照旧由 AI 定。
+- **AI 输出预算**：默认 `maxOutputTokens: 8000` / `batchSize: 6`，而且**批次会自动缩**——按 `(maxOutputTokens - 1024) / 1200` 反推一个批最多塞几条。原因是 `deepseek-flash` / `deepseek-reasoner` 这类**推理模型**会先花 token 写 `reasoning_content`：给 4000 预算、塞 15 条素材时 4000 token 全被思考吃光，`finish_reason=length` 且 `content` 是空的，整批判定白跑。现在遇到这种截断会**自动对半拆批重试**（单条还失败才报错并明确提示「调大 `ai.maxOutputTokens` 或调小 `ai.batchSize`」），并且只有**真的解析出 JSON** 的素材才算处理过（写进快照）；解析失败的下轮还会再试。
+- AI 与规则都可用时：AI 的返回值只在**字段非空**时覆盖规则结果，但「内容判定锁」与 `due_at` 护栏除外（`due_at` 另有一套规则：AI 说「没有截止时间」就能清掉规则从转发头里误抓的日期，反过来 AI 编的时间若早于收信时间会被丢掉，Canvas 自己给的截止时间永远不许改）。AI 挂了整轮降级为规则结果，不会因为没有 AI 就不出任务。
 
 ## 4. 安装
 
@@ -149,9 +152,9 @@ rollback.bat
     "apiKey": "",
     "model": "deepseek-chat",
     "temperature": 0.1,
-    "maxOutputTokens": 4000,
+    "maxOutputTokens": 8000,
     "timeoutMs": 60000,
-    "batchSize": 15
+    "batchSize": 6
   },
   "poll": { "autoPull": true, "intervalSeconds": 600 },
   "scoring": { "urgencyWeight": 10, "importanceWeight": 8 }
@@ -159,6 +162,7 @@ rollback.bat
 ```
 
 - `ai.baseUrl` 要写到 `/v1` 这一层（插件会请求 `{baseUrl}/chat/completions`），任何 OpenAI 兼容端点都行。
+- `ai.maxOutputTokens` / `ai.batchSize`：**推理模型（`deepseek-flash`、`deepseek-reasoner`）请保持默认的 8000 / 6 或更保守**——思考过程也算在 `max_tokens` 里，预算太小时会一个字都吐不出来。批次还会按预算自动再缩，配置的 `batchSize` 只是上限。
 - 没配 `ai.enabled` 也能用：规则评分不需要网络。
 - `poll.autoPull` + `intervalSeconds` 控制后台定时拉取（最小 30 秒）。
 
@@ -211,9 +215,13 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
 
-当前项数：`manifest-check` 48 / `host-check` 54 / `canvas-check` 77 / `client-check` 116 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
+当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 116 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
 
 本版这四条判定修正（转发头时间不是截止时间、分类按内容、不计入总成绩降权、每轮完成对账）**每条都做过伪造对照**：把修复逐项回退到旧行为后，对应断言必须变红——例如关掉「变更门禁之外的完成对账」就报 `pipeline: 只有提交状态变了（哈希不变）也会自动勾掉 → 期望 1，实际 0`；不剥转发头就报 `转发头的发送时间不得成为截止时间：2026-09-25T06:11:00.000Z`；关掉内容分类就报 `期望 "reminder"，实际 "activity"`；关掉降权就报 `期望 1，实际 4`；客户端丢掉 `due_kind` 则三条活动渲染断言一起变红。改这些逻辑前请先跑一遍这套对照。
+
+真机 E2E 又抓到四个夹具没覆盖的坑，现在各有专属断言：**推理模型吃光输出预算**（`llm: 输出被推理吃光时自动拆小批重试，而不是整批放弃` / `llm: 单条素材也被吃光时不再无脑重试，提示怎么调` / `llm: 批次大小按输出预算反推` / `llm: 返回的不是合法 JSON 时不算 settled`）、**关键词子串误命中**（`scoring: 词边界 —— latest 不命中 test、non-final 不命中 final`、`scoring: 申请资格里的 exam/test 不算考试（奖学金公告实测）`）、**正文写明不计分**（`scoring: 素材里写明"不计入总成绩"也要降权`，且必修 + 不计分仍算硬性门槛）、**窗口外的老素材重算**（`pipeline: 判定版本升级时，已经落在窗口外的老素材也会重算`：往 `snapshots` 里塞一条 30 天前的成绩公告 + 一条升级前的旧判定，同时窗口里**还有一条新公告**，跑一轮后老素材必须变成 `reminder` / 重要度 1 / 去掉 `exam` 标签，而「更新」只算新公告那 1 条、「重算」算 2 条）。最后那条的"同时还有一条新公告"是**真机踩出来的**：重算原本写成「这一轮一条变更都没有时才做」，于是 Canvas 只要有一条新公告，窗口外那条老素材就被整个漏掉（`stats.rescored` 只报了邮件那 3 条，`Quiz 3 Grades` 一动不动）。**内容判定锁**也钉住了：`pipeline: 内容判定的降级不接受 AI 抬回去（成绩公告 / 不计分）`，AI 想把「提醒 / 1」改成「活动 / 4」必须失败，同时普通条目仍允许 AI 调整。伪造对照里 `EXAM_COLLOCATION_RE` 一度含 `grades?`，于是 `not counted in your final grade` 被判成考试——夹具当场报 `只有 final grade 不算考试 期望 false，实际 true`，这个坑已经钉住。
+
+用**真 token + 真库副本**（绝不碰真库）跑完整两轮 E2E 后，四条修正在真数据上确认：`Quiz 3 Grades`（30 天前发布、早已滑出回看窗口）从「活动 / 重要 4 / `exam`」变成「提醒 / 重要 0」，模型想抬回去时被内容判定锁挡住；转发过来的篮球招募邮件 `due_at` 从转发头的 `2026-09-25T06:11:00.000Z` 变成 `null`，不再标「已逾期」；`WebWork_1` 与 `Preliminary (for practice only)` 正文里的「Not counted in the final grade」把它们压到重要度 1；两条奖学金公告（`HKDSE English Language Exam` / `public exams`）从重要度 4 掉到 1；8 条已提交作业被自动勾掉（`完成方式: Canvas 已提交`），第二轮状态保持稳定、不重复勾。整体重算一轮 63 条素材约 199 秒、32 次 AI 请求。
 
 `test\client-check.mjs` 的假宿主**照抄真宿主的载荷形状**（`get_config` 回的是 `{ config, dataDir, configPath, configExists, problems }` 这个包装对象），`test\host-check.mjs` 那边还有一条断言把包装对象的键钉死。两边都钉住是有原因的：设置页曾经把包装对象当成配置本身，于是所有字段（学校地址、邮箱账号、模型名…）都渲染成空，看着就像"配置丢了"——而假夹具当时回的是裸配置，所以夹具全绿、真机全空。改夹具之前先改契约，别让夹具比真宿主更宽松。
 
@@ -232,11 +240,11 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 - **IMAP 是明文 `LOGIN` + 993 SSL**，没有 XOAUTH2（登录后按 RFC 2971 发一条 `ID`，网易系必需）。
 - **不会自动清理消失的条目**：Canvas 上被删掉的作业/公告不会从列表里消失。**但会做完成对账**：作业/测验只要 Canvas 那边显示你已提交（或已评分、或该作业本就不需要提交）就保持勾掉，你自己手动取消过的不会被再勾回去。
 - **完成对账是单向的**：插件只会因为你「交了」而勾掉任务，不会因为你「没交」而替你取消勾选（取消由你自己做，且手动取消会被尊重——`status_source='user'` 之后自动对账不再动它）。
-- **`omit_from_final_grade` / `grading_type` / `submission` 不在内容哈希白名单里**：老师事后改「是否计入总成绩」不会触发 AI 重评（提交状态会触发完成对账，改分值不会）。想立刻整体重算，删掉库里 `meta` 表的 `assess_revision` 那一行，或等下一个判定版本升级。
+- **`omit_from_final_grade` / `grading_type` / `submission` 不在内容哈希白名单里**：老师事后改「是否计入总成绩」不会触发 AI 重评（提交状态会触发完成对账，改分值不会）。想立刻整体重算，删掉库里 `meta` 表的 `assess_revision` 那一行（下一轮会连快照里的窗口外老素材一起重算），或等下一个判定版本升级。
 - **公告按课程逐门请求**：`N` 门课会产生 `2N+1` 条请求链，课程多时首轮会慢一些。
 - **不剥 HTML**：公告正文原样保存（只在给 AI 之前做最小清理）；**邮件**正文在判定前会剥掉转发头、`>` 引用块与签名。
 - **报名确认的配对是启发式的**：用确认信与旧任务的共享词（≥2 个，或一个 ≥4 字母的英文强词出现在旧任务标题里）锁定要升级的那条报名提醒，配不上就不动——宁可不动，也不乱改。
-- **AI 失败即降级**：整批 AI 失败时该轮不写快照，下一轮自动重试（不会丢素材，但也不会硬失败）。
+- **AI 失败即降级**：整批 AI 失败时该轮不写快照，下一轮自动重试（不会丢素材，但也不会硬失败）。被推理截断的批会先自动拆小重试，只有连单条都失败才整批放弃；拆批会让请求次数变多（面板上的「AI 判定 N 次」是**实际请求次数**，不是素材条数）。
 
 ## 10. 许可
 
