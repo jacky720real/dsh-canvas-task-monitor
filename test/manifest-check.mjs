@@ -49,10 +49,18 @@ check('dsh.engines.dsh 已声明', typeof pkg.dsh?.engines?.dsh === 'string' && 
 check('声明了 dsh.bundle.patch', pkg.dsh?.bundle?.patch === './cordis.patch.yml', String(pkg.dsh?.bundle?.patch));
 check('files 覆盖 lib 与两个文档', Array.isArray(pkg.files) && ['lib', 'cordis.patch.yml', 'README.md'].every((f) => pkg.files.includes(f)));
 
+// 清单约定取自两个真实第三方插件：dsh-mcp-connector 0.2.58（同样的 layout+面板做法）与
+// dsh-plugin-wallpaper-engine 0.7.5（同样用 webServer 挂同源路由）。两者都不是 private 包。
+check('不是 private 包（要能上传 GitHub、将来也能 npm 安装）', pkg.private !== true, String(pkg.private));
+check('peerDependencies 声明宿主框架 cordis', typeof pkg.peerDependencies?.['@deepseek-ai/cordis'] === 'string', String(pkg.peerDependencies?.['@deepseek-ai/cordis']));
+check('peerDependencies 声明 webServer（宿主半区要挂路由）', typeof pkg.peerDependencies?.['@deepseek-ai/dsh-host-webserver'] === 'string', String(pkg.peerDependencies?.['@deepseek-ai/dsh-host-webserver']));
+check('peerDependencies 声明 react 与 react-dom', typeof pkg.peerDependencies?.react === 'string' && typeof pkg.peerDependencies?.['react-dom'] === 'string');
+
 /* ------------------------------------------------------- 2. 浏览器半区 */
 
 check('dsh.client.platform 是 web', pkg.dsh?.client?.platform === 'web', String(pkg.dsh?.client?.platform));
 check('dsh.client.inject 是字符串数组', Array.isArray(pkg.dsh?.client?.inject) && pkg.dsh.client.inject.every((s) => typeof s === 'string'), (pkg.dsh?.client?.inject ?? []).join(', '));
+check('dsh.client.inject 含 ui-layout（ctx.get("layout").selectPanel 的提供者）', (pkg.dsh?.client?.inject ?? []).includes('@deepseek-ai/dsh-client-ui-layout'));
 
 const clientRel = pkg.exports?.['./client'];
 check('exports["./client"] 存在', typeof clientRel === 'string', String(clientRel));

@@ -1,7 +1,6 @@
 {
   "name": "dsh-canvas-task-monitor",
   "version": "1.0.0",
-  "private": true,
   "description": "Canvas 学习任务监控插件：拉取 Canvas（可选邮箱）→ 变更检测 → 规则/AI 评分 → 在 DSH 侧边栏与主区域显示任务清单。自包含、零运行时依赖。",
   "license": "MIT",
   "keywords": [
@@ -44,6 +43,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.6",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   }
