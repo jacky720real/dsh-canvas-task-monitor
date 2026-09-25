@@ -191,10 +191,14 @@ node test\mail-check.mjs       :: 邮箱连接器：IMAP / Graph / MIME
 node test\sources-check.mjs    :: 来源工厂与纯函数
 node test\cordis-check.mjs     :: 真 cordis 集成：注入 / 挂路由 / 同源围栏 / 拆解（找不到 DSH 自带的 cordis 就跳过）
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps1
-                               :: 安装机器：快照 / 幂等 / 拒绝部分状态 / 逐字节回滚
+                               :: 安装机器：快照 / 幂等 / 拒绝部分状态 / 残留链接 / 链接身份 / 空依赖表 / 逐字节回滚
 ```
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
+
+`test\selftest.ps1` 还额外覆盖三件真机上踩过的事：包装完之后 pnpm **不会**替你删掉 `node_modules\<包名>` 里指向旧目录的符号链接（rollback 自己摘）、`node_modules` 里的条目**必须**解析到本包（指向别的包时 apply 拒绝而不是静默放行）、以及 `"dependencies": {}` 这种全新 profile 的空属性表不会把脚本打崩（`Set-StrictMode -Version Latest` 下的成员枚举会抛 `PropertyNotFoundStrict`）。
+
+安装机器夹具是**可移植**的：仓库根由 `$PSScriptRoot` 推出，临时目录取系统 `TEMP`，找不到真实 profile（`$env:DSH_HOME`，否则 `~\.dsh`）时就**合成**一份最小 profile（`dependencies` 为空、`cordis.patch.yml` 带一条 `modlens`），所以在没装 DSH 的机器上跑同一份脚本结果一致（113 项）。
 
 `cordis-check.mjs` 是唯一会用真实依赖的夹具：它加载 DSH 自带的 `@deepseek-ai/cordis`，起一个真插件宿主并把宿主半区装进去，然后用真 `http.Server` 打一遍同源围栏与 action 白名单。cordis 的查找顺序是：环境变量 `CTM_CORDIS`（指向它的 `lib/index.js`）→ `<DSH_HOME>\profiles\node_modules\@deepseek-ai\cordis\lib\index.js` → 常见的 `DSH Desktop\resources\app\node_modules\...`；都没有就打印 `SKIP` 并以 0 退出。
 

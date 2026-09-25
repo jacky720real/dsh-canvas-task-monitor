@@ -88,6 +88,46 @@ function Get-Prop($Object, [string]$Name) {
     return $property.Value
 }
 
+function Get-PropertyNames($Object) {
+    # StrictMode-safe replacement for @($Object.PSObject.Properties.Name):
+    # member enumeration on a property bag with NO properties raises
+    # PropertyNotFoundStrict, and that is exactly what "dependencies": {}
+    # looks like in a profile that has not installed anything yet.
+    $names = @()
+    if ($null -eq $Object) { return $names }
+    foreach ($property in $Object.PSObject.Properties) { $names += [string]$property.Name }
+    return $names
+}
+
+function Get-LinkTarget([string]$Path) {
+    # Resolved target of a reparse point (directory symlink or junction), or ''
+    # when the path is a real directory (a hoisted copy) or unreadable.
+    $item = Get-Item -LiteralPath $Path -Force
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) { return '' }
+    $raw = @($item.Target)[0]
+    if ([string]::IsNullOrEmpty($raw)) { return '' }
+    if (-not [System.IO.Path]::IsPathRooted($raw)) { $raw = Join-Path (Split-Path -Parent $Path) $raw }
+    return [System.IO.Path]::GetFullPath($raw).TrimEnd('\')
+}
+
+function Test-LinkedIdentity([string]$LinkDir, [string]$ExpectedDir) {
+    # $true when node_modules\<Dep> really is ExpectedDir: the link target must
+    # match when it resolves, and the manifest name/version must match either way
+    # (a hoisted copy is not a reparse point, so the manifest is the only tell).
+    $expected = [System.IO.Path]::GetFullPath($ExpectedDir).TrimEnd('\')
+    $target = Get-LinkTarget $LinkDir
+    if ($target -ne '' -and $target -ne $expected) { return $false }
+    $linkedManifest = Join-Path $LinkDir 'package.json'
+    if (-not (Test-Path -LiteralPath $linkedManifest)) { return $false }
+    $expectedManifest = Join-Path $expected 'package.json'
+    if (-not (Test-Path -LiteralPath $expectedManifest)) { return $false }
+    $linked = Read-Text $linkedManifest | ConvertFrom-Json
+    $want = Read-Text $expectedManifest | ConvertFrom-Json
+    if ((Get-Prop $linked 'name') -ne (Get-Prop $want 'name')) { return $false }
+    if ((Get-Prop $linked 'version') -ne (Get-Prop $want 'version')) { return $false }
+    return $true
+}
+
 function Invoke-Native {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -209,7 +249,7 @@ if ($null -eq $bundles -or $bundles -isnot [System.Array]) {
 }
 $dependencies = Get-Prop $package 'dependencies'
 $dependencyNames = @()
-if ($null -ne $dependencies) { $dependencyNames = @($dependencies.PSObject.Properties.Name) }
+if ($null -ne $dependencies) { $dependencyNames = @(Get-PropertyNames $dependencies) }
 
 $patchText = ''
 $patchExisted = Test-Path -LiteralPath $PatchYml
@@ -235,6 +275,16 @@ if ($hasSnapshot) {
                "Run rollback.bat first, or delete that directory if you are certain you want a fresh apply.")
 }
 if ($alreadyInBundles -and $alreadyDependency -and $alreadyLinked) {
+    # All three traces are present -- but the link can still point at another
+    # package: the previous version of this plugin was pinned at a different
+    # directory, and pnpm does not repoint an existing link. Never report
+    # success (and never let DSH load the old code) without checking identity.
+    if (-not (Test-LinkedIdentity (Join-Path $ProfileDir "node_modules\$DepName") $PluginDir)) {
+        $actual = Get-LinkTarget (Join-Path $ProfileDir "node_modules\$DepName")
+        if ($actual -eq '') { $actual = 'a different directory' }
+        Stop-Fail ("node_modules\$DepName exists but does not resolve to this package (it points at $actual). " +
+                   "Run rollback.bat -- it removes that entry -- and then apply.bat again.")
+    }
     SayOk "nothing to do -- the plugin is already present in this profile"
     exit 0
 }
@@ -359,7 +409,7 @@ if ($installExit -ne 0) {
 
 $reloaded = Read-Text $PackageJson | ConvertFrom-Json
 $reloadedDependencies = Get-Prop $reloaded 'dependencies'
-if ($null -eq $reloadedDependencies -or -not (@($reloadedDependencies.PSObject.Properties.Name) -contains $DepName)) {
+if ($null -eq $reloadedDependencies -or -not (@(Get-PropertyNames $reloadedDependencies) -contains $DepName)) {
     Stop-Fail "the package manager did not record the $DepName dependency; the snapshot was kept -- run rollback.bat"
 }
 SayOk "dependency recorded: $DepName = $(Get-Prop $reloadedDependencies $DepName)"
@@ -420,15 +470,69 @@ if ($officialBase -ne '@deepseek-ai/dsh-base') { Stop-Fail "verification failed:
 
 $linkedDir = Join-Path $ProfileDir "node_modules\$DepName"
 if (-not (Test-Path -LiteralPath $linkedDir)) { Stop-Fail "verification failed: $linkedDir does not exist" }
-$linkedManifestPath = Join-Path $linkedDir 'package.json'
-if (-not (Test-Path -LiteralPath $linkedManifestPath)) { Stop-Fail "verification failed: $linkedManifestPath does not exist" }
-$linkedManifest = Read-Text $linkedManifestPath | ConvertFrom-Json
+
+function Get-LinkTarget([string]$Path) {
+    # Returns the resolved target of a reparse point, or '' when the path is a
+    # real directory (a hoisted copy) or the target cannot be read.
+    $item = Get-Item -LiteralPath $Path -Force
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) { return '' }
+    $raw = @($item.Target)[0]
+    if ([string]::IsNullOrEmpty($raw)) { return '' }
+    if (-not [System.IO.Path]::IsPathRooted($raw)) { $raw = Join-Path (Split-Path -Parent $Path) $raw }
+    return [System.IO.Path]::GetFullPath($raw).TrimEnd('\')
+}
+
+# The entry has to be THIS package. A previous installation of the same name
+# pinned node_modules\<DepName> somewhere else (that is exactly what the old
+# Python-plugin package did), and pnpm does not always repoint an existing link,
+# so comparing manifests alone is not enough -- resolve the link target too and
+# repair once instead of silently loading stale code.
+$expectedTarget = [System.IO.Path]::GetFullPath($PluginDir).TrimEnd('\')
+$manifestPath = Join-Path $linkedDir 'package.json'
+if (-not (Test-Path -LiteralPath $manifestPath)) { Stop-Fail "verification failed: $manifestPath does not exist" }
+$linkedManifest = Read-Text $manifestPath | ConvertFrom-Json
+$expectedManifest = Read-Text (Join-Path $PluginDir 'package.json') | ConvertFrom-Json
+$linkedTarget = Get-LinkTarget $linkedDir
+$identityMismatch = ($linkedTarget -ne '' -and $linkedTarget -ne $expectedTarget) -or
+    ((Get-Prop $linkedManifest 'name') -ne (Get-Prop $expectedManifest 'name')) -or
+    ((Get-Prop $linkedManifest 'version') -ne (Get-Prop $expectedManifest 'version'))
+if ($identityMismatch) {
+    $where = if ($linkedTarget -eq '') { 'a real directory' } else { $linkedTarget }
+    SayWarn ("node_modules\$DepName does not resolve to this package (it points at $where) -- repairing")
+    if ($linkedTarget -eq '') { Remove-Item -LiteralPath $linkedDir -Recurse -Force }
+    else { & cmd.exe /c "rmdir `"$linkedDir`"" | Out-Null }
+    if (Test-Path -LiteralPath $linkedDir) { Stop-Fail "verification failed: $linkedDir could not be removed for repair" }
+    $repairExit = -1
+    if ($useDsh) { $repairExit = Invoke-Native -FilePath $shimPath -Arguments @('plugin', '--profile', $ProfileName, 'install') }
+    if (-not $useDsh -or $repairExit -ne 0) {
+        if (-not $pnpmPath) {
+            Stop-Fail "the link could not be repaired and pnpm was not found on PATH; the snapshot was kept -- run rollback.bat"
+        }
+        $repairExit = Invoke-Native -FilePath $pnpmPath -Arguments @($PnpmPolicyArg, 'install') -WorkDir $ProfileDir
+    }
+    if ($repairExit -ne 0) { Stop-Fail "repairing node_modules\$DepName failed (exit $repairExit); the snapshot was kept -- run rollback.bat" }
+    if (-not (Test-Path -LiteralPath $linkedDir)) { Stop-Fail "verification failed: $linkedDir was not recreated by the repair run" }
+    $manifestPath = Join-Path $linkedDir 'package.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) { Stop-Fail "verification failed: $manifestPath does not exist after the repair run" }
+    $linkedManifest = Read-Text $manifestPath | ConvertFrom-Json
+    $linkedTarget = Get-LinkTarget $linkedDir
+    if ($linkedTarget -ne '' -and $linkedTarget -ne $expectedTarget) {
+        Stop-Fail "verification failed: $linkedDir still points at $linkedTarget instead of $expectedTarget"
+    }
+    if (((Get-Prop $linkedManifest 'name') -ne (Get-Prop $expectedManifest 'name')) -or
+        ((Get-Prop $linkedManifest 'version') -ne (Get-Prop $expectedManifest 'version'))) {
+        Stop-Fail "verification failed: $linkedDir still contains another package after the repair run"
+    }
+    SayOk "repaired the link: node_modules\$DepName now resolves to this package"
+}
+if ($linkedTarget -ne '') { SayOk "linked package resolves to $linkedTarget" }
+else { SayOk "linked package is a hoisted copy of this package" }
 $declaredPatch = Get-Prop (Get-Prop (Get-Prop $linkedManifest 'dsh') 'bundle') 'patch'
 if ([string]::IsNullOrEmpty($declaredPatch)) { Stop-Fail "verification failed: the linked package declares no dsh.bundle.patch" }
 if (-not (Test-Path -LiteralPath (Join-Path $linkedDir $declaredPatch))) {
     Stop-Fail "verification failed: dsh.bundle.patch ($declaredPatch) does not exist inside the linked package"
 }
-SayOk "linked package resolves and declares patch $declaredPatch"
+SayOk "linked package declares patch $declaredPatch"
 
 Write-Host ''
 SayOk "apply finished"

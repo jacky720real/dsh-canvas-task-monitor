@@ -10,15 +10,19 @@
 #>
 $ErrorActionPreference = 'Stop'
 
-$RepoRoot    = '<repo-root>'
-$Root        = 'D:\dev\dshworkplace\dsh-ctm-selftest'
+# Paths are derived from this file's location so the suite runs from any checkout.
+# The throwaway sandbox lives in %TEMP%; the real desktop profile is only used as
+# a template when it exists (see the setup section) and is never written to.
+$RepoRoot    = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { '<repo-root>' }
+$Root        = Join-Path ([System.IO.Path]::GetTempPath()) 'dsh-ctm-selftest'
 $ProfileDir  = Join-Path $Root 'profile'
 $OriginalDir = Join-Path $Root 'original'
 $TestDir     = Join-Path $RepoRoot 'test'
 $FakeBin     = Join-Path $TestDir 'fakebin'
 $ApplyScript = Join-Path $RepoRoot 'install\apply.ps1'
 $RollbackScript = Join-Path $RepoRoot 'install\rollback.ps1'
-$RealProfile = 'C:\Users\<you>\.dsh\profiles\desktop'
+$DshHome     = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $env:USERPROFILE '.dsh' }
+$RealProfile = Join-Path $DshHome 'profiles\desktop'
 $DepName     = 'dsh-canvas-task-monitor'
 $SnapshotDir = Join-Path $ProfileDir '.dsh-ctm-snapshot'
 $ProfileFiles = @('package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml')
@@ -88,8 +92,33 @@ if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -For
 New-Item -ItemType Directory -Path $ProfileDir -Force | Out-Null
 New-Item -ItemType Directory -Path $OriginalDir -Force | Out-Null
 foreach ($name in $ProfileFiles) {
-    Copy-Item -LiteralPath (Join-Path $RealProfile $name) -Destination (Join-Path $ProfileDir $name) -Force
-    Copy-Item -LiteralPath (Join-Path $RealProfile $name) -Destination (Join-Path $OriginalDir $name) -Force
+    $template = Join-Path $RealProfile $name
+    if (Test-Path -LiteralPath $template) {
+        Copy-Item -LiteralPath $template -Destination (Join-Path $ProfileDir $name) -Force
+        Copy-Item -LiteralPath $template -Destination (Join-Path $OriginalDir $name) -Force
+    }
+    else {
+        # No DSH profile on this machine: synthesize a minimal, plausible one.
+        # Nothing here is asserted beyond byte-for-byte restore, so shape is all
+        # that matters; the bundle list keeps the "@deepseek-ai/dsh-base first"
+        # ordering the install script enforces.
+        $body = switch ($name) {
+            'package.json' {
+                @{
+                    name         = 'desktop'
+                    private      = $true
+                    dependencies = @{}
+                    dsh          = @{ profile = @{ bundles = @('@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app') } }
+                } | ConvertTo-Json -Depth 10
+            }
+            'pnpm-lock.yaml' { "lockfileVersion: '9.0'`nsettings:`n  autoInstallPeers: false`n" }
+            'pnpm-workspace.yaml' { "packages:`n  - .`n" }
+            'cordis.patch.yml' { "- id: modlens`n  name: '@liustack/modlens'`n" }
+            default { '' }
+        }
+        Write-Raw (Join-Path $ProfileDir $name) $body
+        Write-Raw (Join-Path $OriginalDir $name) $body
+    }
 }
 
 # The template is taken from the real profile, which may already carry this
@@ -286,7 +315,7 @@ Check 'T2 pnpm receives the link spec of the plugin package' `
 
 $pkg = Read-Json (Join-Path $ProfileDir 'package.json')
 $bundles = @($pkg.dsh.profile.bundles)
-Check 'T2 dependency recorded' (@($pkg.dependencies.PSObject.Properties.Name) -contains $DepName)
+Check 'T2 dependency recorded' ($null -ne $pkg.dependencies.PSObject.Properties[$DepName])
 Check 'T2 bundle appended' ($bundles -contains $DepName)
 Check 'T2 bundle appended last' ($bundles[-1] -eq $DepName)
 Check 'T2 bundle count grew by exactly one' ($bundles.Count -eq $originalBundleCount + 1)
@@ -323,7 +352,7 @@ Check 'T4 used the pnpm channel' ($t4.Text -match 'channel : pnpm install')
 Check 'T4 snapshot removed' (-not (Test-Path -LiteralPath $SnapshotDir))
 Check 'T4 node_modules link pruned' (-not (Test-Path -LiteralPath (Join-Path $ProfileDir "node_modules\$DepName")))
 $restored = Read-Json (Join-Path $ProfileDir 'package.json')
-Check 'T4 dependency removed' (-not (@($restored.dependencies.PSObject.Properties.Name) -contains $DepName))
+Check 'T4 dependency removed' ($null -eq $restored.dependencies.PSObject.Properties[$DepName])
 Check 'T4 bundle entry removed' (-not (@($restored.dsh.profile.bundles) -contains $DepName))
 $restoredPatch = Read-Raw (Join-Path $ProfileDir 'cordis.patch.yml')
 Check 'T4 patch entry removed' (-not ($restoredPatch -match '(?m)^\s*-\s*id:\s*canvas-task-monitor\s*$'))
@@ -460,12 +489,91 @@ Check 'T16 the policy argument reaches pnpm' `
 $t16b = Invoke-Step $RollbackScript @('-ProfileDir', $ProfileDir)
 Check 'T16 rollback exits 0' ($t16b.Code -eq 0) ("code=" + $t16b.Code + " :: " + $t16b.Text)
 
+# -------------------------------------------------------------------- T17 ---
+# A stale node_modules entry must not survive a rollback. The hoisted linker
+# does not remove an existing `link:` junction when the dependency disappears
+# from package.json -- that is exactly what made the first real-machine rollback
+# fail its own verification ("... still exists after the package manager run").
+# fake-pnpm.mjs models that behaviour now, so this case only passes when
+# rollback removes the leftover entry itself instead of trusting pnpm.
+$env:APPDATA = Join-Path $Root 'appdata'
+$env:PATH = $SanitizedPath
+$linkedDir = Join-Path $ProfileDir "node_modules\$DepName"
+$t17 = Invoke-Step $ApplyScript @('-ProfileDir', $ProfileDir, '-PluginDir', $PluginFixture)
+Check 'T17 apply exits 0' ($t17.Code -eq 0) ("code=" + $t17.Code + " :: " + $t17.Text)
+Check 'T17 the link is in place before the rollback' (Test-Path -LiteralPath (Join-Path $linkedDir 'package.json'))
+$t17b = Invoke-Step $RollbackScript @('-ProfileDir', $ProfileDir)
+Check 'T17 rollback exits 0 although pnpm left the link behind' ($t17b.Code -eq 0) ("code=" + $t17b.Code + " :: " + $t17b.Text)
+Check 'T17 rollback removed the leftover entry itself' ($t17b.Text -match 'removing the stale link') ("text=" + $t17b.Text)
+Check 'T17 the node_modules entry is gone' (-not (Test-Path -LiteralPath $linkedDir))
+Check 'T17 the snapshot is gone' (-not (Test-Path -LiteralPath $SnapshotDir))
+
+# -------------------------------------------------------------------- T18 ---
+# A link that resolves to another package must never be accepted. The previous
+# plugin lived in a different directory under the same package name, and the
+# linked manifest declares dsh.bundle.patch just like this one -- so a check that
+# only reads that manifest lets DSH load the old code. $PluginBroken is exactly
+# that shape: same name, same version, built from the same package.json.
+Copy-Item -LiteralPath (Join-Path $OriginalDir 'package.json') -Destination (Join-Path $ProfileDir 'package.json') -Force
+$t18Json = Read-Json (Join-Path $ProfileDir 'package.json')
+$t18Json.dependencies | Add-Member -NotePropertyName $DepName -NotePropertyValue 'link:D:/somewhere-else' -Force
+$t18Json.dsh.profile.bundles = @($t18Json.dsh.profile.bundles) + @($DepName)
+Write-Raw (Join-Path $ProfileDir 'package.json') ($t18Json | ConvertTo-Json -Depth 10)
+New-Item -ItemType Junction -Path $linkedDir -Target $PluginBroken | Out-Null
+$t18 = Invoke-Step $ApplyScript @('-ProfileDir', $ProfileDir, '-PluginDir', $PluginFixture)
+Check 'T18 apply refuses a link that resolves elsewhere' ($t18.Code -ne 0) ("code=" + $t18.Code + " :: " + $t18.Text)
+Check 'T18 the refusal names the foreign target' ($t18.Text -match 'does not resolve to this package') ("text=" + $t18.Text)
+Check 'T18 the refusal points at rollback.bat' ($t18.Text -match 'rollback\.bat') ("text=" + $t18.Text)
+$t18Target = ''
+try { $t18Item = Get-Item -LiteralPath $linkedDir -Force; $t18Target = [string](@($t18Item.Target)[0]) } catch { }
+Check 'T18 the link really pointed at the other package' ($t18Target -like '*plugin-broken*') ("target=" + $t18Target)
+
+# Without a snapshot there is nothing to restore, so rollback must refuse rather
+# than guess; the fixture is then put back by hand.
+$t18b = Invoke-Step $RollbackScript @('-ProfileDir', $ProfileDir)
+Check 'T18 rollback refuses when traces exist without a snapshot' ($t18b.Code -ne 0) ("code=" + $t18b.Code + " :: " + $t18b.Text)
+Check 'T18 that refusal explains the missing snapshot' ($t18b.Text -match 'no snapshot') ("text=" + $t18b.Text)
+
+& cmd.exe /c "rmdir `"$linkedDir`"" | Out-Null
+Copy-Item -LiteralPath (Join-Path $OriginalDir 'package.json') -Destination (Join-Path $ProfileDir 'package.json') -Force
+$t18c = Invoke-Step $ApplyScript @('-ProfileDir', $ProfileDir, '-PluginDir', $PluginFixture)
+Check 'T18 a clean retry applies' ($t18c.Code -eq 0) ("code=" + $t18c.Code + " :: " + $t18c.Text)
+$t18Target2 = ''
+try { $t18Item2 = Get-Item -LiteralPath $linkedDir -Force; $t18Target2 = [string](@($t18Item2.Target)[0]) } catch { }
+Check 'T18 the link now resolves to this package' ($t18Target2 -like '*\plugin') ("target=" + $t18Target2)
+$t18d = Invoke-Step $RollbackScript @('-ProfileDir', $ProfileDir)
+Check 'T18 the final rollback exits 0' ($t18d.Code -eq 0) ("code=" + $t18d.Code + " :: " + $t18d.Text)
+
+# -------------------------------------------------------------------- T19 ---
+# A brand-new profile carries "dependencies": {} -- an EMPTY property bag. Under
+# Set-StrictMode -Version Latest, member enumeration on an empty bag
+# (@($obj.PSObject.Properties.Name)) is a terminating PropertyNotFoundStrict
+# error, so both scripts must read that shape some other way. The real profile on
+# this machine has dependencies, which is why the suite missed this until the
+# relocatable fixture started synthesizing an empty one.
+$env:APPDATA = Join-Path $Root 'appdata'
+$env:PATH = $SanitizedPath
+$emptyDir = Join-Path $Root 'empty-profile'
+if (Test-Path -LiteralPath $emptyDir) { Remove-Item -LiteralPath $emptyDir -Recurse -Force }
+New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+foreach ($name in $ProfileFiles) { Copy-Item -LiteralPath (Join-Path $OriginalDir $name) -Destination (Join-Path $emptyDir $name) -Force }
+$emptyJson = Read-Json (Join-Path $emptyDir 'package.json')
+$emptyJson.dependencies = [pscustomobject]@{}
+Write-Raw (Join-Path $emptyDir 'package.json') ($emptyJson | ConvertTo-Json -Depth 10)
+$t19 = Invoke-Step $ApplyScript @('-ProfileDir', $emptyDir, '-PluginDir', $PluginFixture, '-DryRun')
+Check 'T19 dry run tolerates an empty dependencies object' ($t19.Code -eq 0) ("code=" + $t19.Code + " :: " + $t19.Text)
+Check 'T19 no strict-mode property error' (-not ($t19.Text -match 'cannot be found|PropertyNotFoundStrict')) ("text=" + $t19.Text)
+Check 'T19 the dry run made no snapshot' (-not (Test-Path -LiteralPath (Join-Path $emptyDir '.dsh-ctm-snapshot')))
+$t19b = Invoke-Step $RollbackScript @('-ProfileDir', $emptyDir)
+Check 'T19 rollback tolerates an empty dependencies object' ($t19b.Code -eq 0) ("code=" + $t19b.Code + " :: " + $t19b.Text)
+Check 'T19 rollback reports nothing to roll back' ($t19b.Text -match 'nothing to roll back') ("text=" + $t19b.Text)
+
 $env:APPDATA = Join-Path $Root 'appdata'
 $env:PATH = $SanitizedPath
 $finalHashes3 = Get-Hashes -Directory $ProfileDir
 $identical3 = $true
 foreach ($name in $originalHashes.Keys) { if ($originalHashes[$name] -ne $finalHashes3[$name]) { $identical3 = $false } }
-Check 'T15/T16 profile is byte-identical to the original again' $identical3
+Check 'T15/T16/T17/T18 profile is byte-identical to the original again' $identical3
 
 # ---------------------------------------------------------------- summary ---
 Write-Host ''

@@ -64,6 +64,17 @@ function Get-Prop($Object, [string]$Name) {
     return $property.Value
 }
 
+function Get-PropertyNames($Object) {
+    # StrictMode-safe replacement for @($Object.PSObject.Properties.Name):
+    # member enumeration on a property bag with NO properties raises
+    # PropertyNotFoundStrict, and that is exactly what "dependencies": {}
+    # looks like in a profile that has not installed anything yet.
+    $names = @()
+    if ($null -eq $Object) { return $names }
+    foreach ($property in $Object.PSObject.Properties) { $names += [string]$property.Name }
+    return $names
+}
+
 function Invoke-Native {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -87,6 +98,40 @@ function Invoke-Native {
         if ($pushed) { Pop-Location }
         $ErrorActionPreference = $saved
     }
+}
+
+function Get-LinkTarget([string]$Path) {
+    # Resolved target of a reparse point (directory symlink or junction), or ''
+    # when the path is a real directory (a hoisted copy) or unreadable.
+    $item = Get-Item -LiteralPath $Path -Force
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) { return '' }
+    $raw = @($item.Target)[0]
+    if ([string]::IsNullOrEmpty($raw)) { return '' }
+    if (-not [System.IO.Path]::IsPathRooted($raw)) { $raw = Join-Path (Split-Path -Parent $Path) $raw }
+    return [System.IO.Path]::GetFullPath($raw).TrimEnd('\')
+}
+
+function Remove-LinkedEntry([string]$LinkDir) {
+    # pnpm's hoisted linker does NOT remove an existing `link:` symlink/junction
+    # when the dependency disappears from package.json: it rewrites the manifest
+    # and the lockfile, exits 0, and leaves node_modules\<DepName> pointing at the
+    # previous package (observed on a real profile). So remove exactly that entry
+    # ourselves. A reparse point is unlinked with `rmdir`, which never walks into
+    # the target -- only the entry must go.
+    if (-not (Test-Path -LiteralPath $LinkDir)) { return $false }
+    $target = Get-LinkTarget $LinkDir
+    if ($target -ne '') {
+        SayWarn "removing the stale link at $LinkDir (it points at $target)"
+        & cmd.exe /c "rmdir `"$LinkDir`"" | Out-Null
+    }
+    else {
+        SayWarn "removing the leftover directory at $LinkDir"
+        Remove-Item -LiteralPath $LinkDir -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $LinkDir) {
+        Stop-Fail "verification failed: $LinkDir survived an explicit removal attempt"
+    }
+    return $true
 }
 
 function Find-DshCommand {
@@ -165,7 +210,7 @@ try { $package = $packageText | ConvertFrom-Json } catch { Stop-Fail "profile pa
 $bundles = Get-Prop (Get-Prop (Get-Prop $package 'dsh') 'profile') 'bundles'
 $dependencies = Get-Prop $package 'dependencies'
 $dependencyNames = @()
-if ($null -ne $dependencies) { $dependencyNames = @($dependencies.PSObject.Properties.Name) }
+if ($null -ne $dependencies) { $dependencyNames = @(Get-PropertyNames $dependencies) }
 $patchText = ''
 if (Test-Path -LiteralPath $PatchYml) { $patchText = Read-Text $PatchYml }
 
@@ -173,16 +218,26 @@ $hasDependency = $dependencyNames -contains $DepName
 $hasBundleEntry = if ($null -ne $bundles) { @($bundles) -contains $DepName } else { $false }
 $hasPatchEntry = [regex]::IsMatch($patchText, "(?m)^\s*-\s*id:\s*$([regex]::Escape($LoaderId))\s*$")
 $hasSnapshot = Test-Path -LiteralPath $SnapshotDir
+$linkedDir = Join-Path $ProfileDir "node_modules\$DepName"
+$hasLinkEntry = Test-Path -LiteralPath $linkedDir
 
-Say "state   : bundles=$hasBundleEntry dependency=$hasDependency patchEntry=$hasPatchEntry snapshot=$hasSnapshot"
+Say "state   : bundles=$hasBundleEntry dependency=$hasDependency patchEntry=$hasPatchEntry link=$hasLinkEntry snapshot=$hasSnapshot"
 
 if (-not $hasSnapshot) {
-    if (-not $hasBundleEntry -and -not $hasDependency -and -not $hasPatchEntry) {
+    if (-not $hasBundleEntry -and -not $hasDependency -and -not $hasPatchEntry -and -not $hasLinkEntry) {
         SayOk "nothing to roll back -- the profile is already clean and no snapshot exists"
         exit 0
     }
+    # A leftover node_modules entry needs no snapshot to undo: there is nothing
+    # to restore, only a stale link to remove.
+    if (-not $hasBundleEntry -and -not $hasDependency -and -not $hasPatchEntry) {
+        if (Remove-LinkedEntry $linkedDir) {
+            SayOk "removed the leftover node_modules entry; the profile now carries no trace of $DepName"
+            exit 0
+        }
+    }
     Stop-Fail ("no snapshot at $SnapshotDir, but the profile still carries traces " +
-               "(bundles=$hasBundleEntry dependency=$hasDependency patchEntry=$hasPatchEntry). " +
+               "(bundles=$hasBundleEntry dependency=$hasDependency patchEntry=$hasPatchEntry link=$hasLinkEntry). " +
                "Refusing to guess: remove those by hand, or restore a known-good package.json.")
 }
 
@@ -288,11 +343,20 @@ if ($installExit -ne 0) {
                "but node_modules may still contain $DepName. Fix the package manager and run rollback.bat again.")
 }
 
+# ------------------------------------------------- clean residual links -----
+# Do not trust the prune above: see Remove-LinkedEntry for why a stale link can
+# survive a successful package-manager run.
+if (Test-Path -LiteralPath $linkedDir) {
+    if (Remove-LinkedEntry $linkedDir) {
+        SayOk "removed the residual node_modules entry the package manager left behind"
+    }
+}
+
 # --------------------------------------------------------------- verify -----
 $finalPackage = Read-Text $PackageJson | ConvertFrom-Json
 $finalDependencies = Get-Prop $finalPackage 'dependencies'
 $finalDependencyNames = @()
-if ($null -ne $finalDependencies) { $finalDependencyNames = @($finalDependencies.PSObject.Properties.Name) }
+if ($null -ne $finalDependencies) { $finalDependencyNames = @(Get-PropertyNames $finalDependencies) }
 if ($finalDependencyNames -contains $DepName) { Stop-Fail "verification failed: $DepName is still a dependency" }
 $finalBundles = @(Get-Prop (Get-Prop (Get-Prop $finalPackage 'dsh') 'profile') 'bundles')
 if ($finalBundles -contains $DepName) { Stop-Fail "verification failed: $DepName is still in dsh.profile.bundles" }
@@ -300,7 +364,6 @@ $finalPatch = Read-Text $PatchYml
 if ([regex]::IsMatch($finalPatch, "(?m)^\s*-\s*id:\s*$([regex]::Escape($LoaderId))\s*$")) {
     Stop-Fail "verification failed: the $LoaderId patch entry is still present"
 }
-$linkedDir = Join-Path $ProfileDir "node_modules\$DepName"
 if (Test-Path -LiteralPath $linkedDir) {
     Stop-Fail "verification failed: $linkedDir still exists after the package manager run"
 }

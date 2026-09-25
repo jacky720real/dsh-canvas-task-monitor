@@ -4,7 +4,7 @@
 //
 // FAKE_PLUGIN_DIR is the package the harness wants linked; the default is the
 // published plugin location (the repository root of dsh-canvas-task-monitor).
-import { readFileSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, symlinkSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 const profile = process.env.FAKE_PROFILE;
@@ -31,6 +31,17 @@ function writePkg(value) {
   writeFileSync(pkgPath, JSON.stringify(value, null, 2) + "\n", "utf8");
 }
 
+// The real pnpm does NOT remove an existing `link:` entry when the dependency
+// disappears from package.json -- a stale junction survived a successful
+// `pnpm install` on a real profile. So the default here is the faithful one:
+// leave the link; FAKE_PNPM_PRUNE_LINK=1 restores the old optimistic behaviour
+// that hid the bug (it is kept as a switch for debugging).
+function linkPlugin(linkDir) {
+  mkdirSync(dirname(linkDir), { recursive: true });
+  rmSync(linkDir, { recursive: true, force: true });
+  symlinkSync(pluginDir, linkDir, "junction");
+}
+
 if (process.env.FAKE_PNPM_FAIL === "1") {
   console.error("fake pnpm: forced failure");
   process.exit(1);
@@ -43,9 +54,7 @@ if (command === "add") {
   pkg.dependencies[depName] = spec;
   writePkg(pkg);
   const linkDir = join(profile, "node_modules", depName);
-  mkdirSync(dirname(linkDir), { recursive: true });
-  rmSync(linkDir, { recursive: true, force: true });
-  symlinkSync(pluginDir, linkDir, "junction");
+  linkPlugin(linkDir);
   console.log(`fake pnpm: added ${depName} (${spec}) -> ${pluginDir}`);
   if (process.env.FAKE_PNPM_RECONCILE === "1") {
     // Mimic dsh/lib/plugin-*.js reconcilePlugins on a successful `dsh plugin
@@ -65,11 +74,19 @@ if (command === "add") {
 if (command === "install") {
   const pkg = readPkg();
   const linkDir = join(profile, "node_modules", depName);
-  if (!pkg.dependencies || !pkg.dependencies[depName]) {
-    rmSync(linkDir, { recursive: true, force: true });
-    console.log(`fake pnpm: pruned ${depName}`);
+  const wanted = Boolean(pkg.dependencies && pkg.dependencies[depName]);
+  if (!wanted) {
+    if (process.env.FAKE_PNPM_PRUNE_LINK === "1") {
+      rmSync(linkDir, { recursive: true, force: true });
+      console.log(`fake pnpm: pruned ${depName}`);
+    } else {
+      console.log(`fake pnpm: left ${linkDir} in place (real pnpm does not remove stale links)`);
+    }
+  } else if (leaveStaleOnce() && existsSync(linkDir)) {
+    console.log(`fake pnpm: left the pre-existing link at ${linkDir} untouched (real pnpm may not repoint it)`);
   } else {
-    console.log(`fake pnpm: kept ${depName}`);
+    linkPlugin(linkDir);
+    console.log(`fake pnpm: kept ${depName} (link repointed at ${pluginDir})`);
   }
   process.exit(0);
 }
