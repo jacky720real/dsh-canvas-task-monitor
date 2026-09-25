@@ -85,7 +85,7 @@ apply.bat             :: 真正安装
 ### 卸载
 
 ```bat
-cd <repo-root>\install
+cd <你克隆下来的仓库>\install
 rollback.bat
 ```
 
@@ -184,7 +184,7 @@ dsh-canvas-task-monitor/
 ## 8. 自测
 
 ```bat
-cd <repo-root>
+cd <你克隆下来的仓库>
 node test\manifest-check.mjs    :: 发布清单：DSH 读包的方式（dsh.client / exports["./client"] / bundle 行 / 自包含承诺）
 node test\host-check.mjs       :: 宿主半区：配置 / 存储不变量 / 评分 / AI 清洗 / 路由 / 同源围栏
 node test\canvas-check.mjs     :: Canvas 连接器：分页 / 限流 / 重试 / 回看窗口

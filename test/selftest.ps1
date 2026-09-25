@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 # Paths are derived from this file's location so the suite runs from any checkout.
 # The throwaway sandbox lives in %TEMP%; the real desktop profile is only used as
 # a template when it exists (see the setup section) and is never written to.
-$RepoRoot    = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { '<repo-root>' }
+$RepoRoot    = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { Join-Path (Get-Location) 'dsh-canvas-task-monitor' }
 $Root        = Join-Path ([System.IO.Path]::GetTempPath()) 'dsh-ctm-selftest'
 $ProfileDir  = Join-Path $Root 'profile'
 $OriginalDir = Join-Path $Root 'original'
@@ -189,7 +189,7 @@ foreach ($pair in @(@($FakeDshBin, 'profile'), @($FakeDshOtherBin, 'other'))) {
     $lines = @(
         '@echo off',
         ('set "DSH_DESKTOP_DEFAULT_PROFILE=' + $value + '"'),
-        'set "DSH_HOME=C:\Users\<you>\.dsh"',
+        ('set "DSH_HOME=' + $DshHome + '"'),
         ('node "' + (Join-Path $TestDir 'fake-dsh.mjs') + '" %*'),
         'exit /b %ERRORLEVEL%'
     )

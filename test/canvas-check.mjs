@@ -3,7 +3,7 @@
  * lib/canvas.js 的离线自检 fixture（零依赖，纯 Node）。
  *
  * 运行方式（工作目录必须是插件根目录）：
- *   cd <repo-root>
+ *   cd <仓库根>
  *   node test/canvas-check.mjs
  *
  * 覆盖的行为：

@@ -162,9 +162,9 @@ let savedConfig = null;
 
 function statusPayload() {
   return {
-    dataDir: statusReady ? 'C:\\Users/<you>\\.dsh\\canvas-task-monitor' : '',
-    dbPath: statusReady ? 'C:\\Users/<you>\\.dsh\\canvas-task-monitor\\tasks.sqlite' : '',
-    configPath: statusReady ? 'C:\\Users/<you>\\.dsh\\canvas-task-monitor\\config.json' : '',
+    dataDir: statusReady ? 'C:\\Users\\tester\\.dsh\\canvas-task-monitor' : '',
+    dbPath: statusReady ? 'C:\\Users\\tester\\.dsh\\canvas-task-monitor\\tasks.sqlite' : '',
+    configPath: statusReady ? 'C:\\Users\\tester\\.dsh\\canvas-task-monitor\\config.json' : '',
     version: '1.0.0',
     sources: {
       canvas: { enabled: true, configured: true },
