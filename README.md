@@ -174,7 +174,7 @@ dsh-canvas-task-monitor/
 │  ├─ scoring.js         # 规则评分：截止时间提取 + 关键词重要度 + 排序
 │  └─ util.js            # 时间 / 哈希 / 字符串工具
 ├─ install/              # apply.bat|ps1、rollback.bat|ps1（幂等，可回滚）
-└─ test/                 # 五套自测夹具（见下）
+└─ test/                 # 七套自测夹具（见下）
 ```
 
 宿主半区在 DSH 的 `webServer` 上注册**前缀路由** `/canvas-task-monitor/api`，浏览器半区用 `POST {action, params}` 调用；action 是白名单（`status`、`summarize_pending`、`list_tasks`、`get_task`、`mark_task`、`poll_now`、`get_config`、`save_config`、`test_source`、`reset_data`），并且只接受**同源**请求。
@@ -189,11 +189,14 @@ node test\canvas-check.mjs     :: Canvas 连接器：分页 / 限流 / 重试 / 
 node test\client-check.mjs     :: 浏览器半区：渲染与交互（react 由夹具桩接）
 node test\mail-check.mjs       :: 邮箱连接器：IMAP / Graph / MIME
 node test\sources-check.mjs    :: 来源工厂与纯函数
+node test\cordis-check.mjs     :: 真 cordis 集成：注入 / 挂路由 / 同源围栏 / 拆解（找不到 DSH 自带的 cordis 就跳过）
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps1
                                :: 安装机器：快照 / 幂等 / 拒绝部分状态 / 逐字节回滚
 ```
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
+
+`cordis-check.mjs` 是唯一会用真实依赖的夹具：它加载 DSH 自带的 `@deepseek-ai/cordis`，起一个真插件宿主并把宿主半区装进去，然后用真 `http.Server` 打一遍同源围栏与 action 白名单。cordis 的查找顺序是：环境变量 `CTM_CORDIS`（指向它的 `lib/index.js`）→ `<DSH_HOME>\profiles\node_modules\@deepseek-ai\cordis\lib\index.js` → 常见的 `DSH Desktop\resources\app\node_modules\...`；都没有就打印 `SKIP` 并以 0 退出。
 
 ## 9. 已知限制
 
