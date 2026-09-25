@@ -159,6 +159,10 @@ const iso = (deltaMs) => new Date(Date.now() + deltaMs).toISOString();
 const calls = [];
 let statusReady = false;
 let savedConfig = null;
+const CONFIG_DIR = 'C:\\Users\\tester\\.dsh\\canvas-task-monitor';
+const CONFIG_FILE = `${CONFIG_DIR}\\config.json`;
+/** 'wrapped' 照抄真宿主契约；'broken' 模拟宿主没给出配置内容。 */
+let configPayloadMode = 'wrapped';
 
 function statusPayload() {
   return {
@@ -240,10 +244,15 @@ async function fakeFetch(url, init) {
     return respond({ ...taskRows.find((task) => task.id === body.params.task_id) });
   }
   if (body.action === 'poll_now') return respond({ fetched: 3, created: 0, updated: 1, unchanged: 2, durationMs: 12, sources: [{ source: 'canvas', ok: true, message: 'OK' }] });
-  if (body.action === 'get_config') return respond(configFixture());
+  /* 真宿主 get_config 的 data 是 { config, dataDir, configPath, configExists, problems }，
+     不是裸配置（lib/index.js 的 handler 与这里必须一致，否则面板会渲染成空）。 */
+  if (body.action === 'get_config') {
+    if (configPayloadMode === 'broken') return respond({ dataDir: CONFIG_DIR, configPath: CONFIG_FILE, configExists: true, problems: ['配置文件损坏：第 1 行不是合法 JSON'] });
+    return respond({ config: maskSecrets(configFixture()), dataDir: CONFIG_DIR, configPath: CONFIG_FILE, configExists: true, problems: [] });
+  }
   if (body.action === 'save_config') {
     savedConfig = body.params.config;
-    return respond({ ok: true, config: maskSecrets(savedConfig) });
+    return respond({ config: maskSecrets(savedConfig), configPath: CONFIG_FILE, problems: [], savedAt: new Date().toISOString() });
   }
   if (body.action === 'test_source') {
     if (body.params.source === 'canvas') return respond({ ok: true, message: '连接成功：Canvas 可访问' });
@@ -521,10 +530,21 @@ check('canvas.baseUrl 为受控输入且带默认值', baseUrlInput !== undefine
 check('canvas.baseUrl 占位符正确', baseUrlInput?.props.placeholder === 'https://your-school.instructure.com');
 check('ai.baseUrl 占位符正确', byField('ai.baseUrl')[0]?.props.placeholder === 'https://api.deepseek.com/v1');
 
+// 这一组是“配置看起来丢了”的回归守卫：宿主包装壳必须被拆开，字段才会被回填
+check(
+  '设置页拆开宿主包装对象后回填普通字段',
+  byField('mail.user')[0]?.props.value === 'me@example.com' && byField('ai.model')[0]?.props.value === 'deepseek-chat',
+  JSON.stringify([byField('mail.user')[0]?.props.value, byField('ai.model')[0]?.props.value]),
+);
+check('设置页显示真正读到的配置文件', flatten(byRole('config-source')[0]).includes('config.json'), flatten(byRole('config-source')[0]));
+check('配置没有问题时不显示体检横幅', byRole('config-problems').length === 0, `${byRole('config-problems').length} 条`);
+
 const tokenInput = byField('canvas.token')[0];
 check('密文字段渲染为空输入框', tokenInput !== undefined && tokenInput.props.value === '');
 check('密文字段 placeholder 提示已保存', tokenInput?.props.placeholder === '已保存（留空表示不修改）', tokenInput?.props.placeholder);
 check('密文字段 type=password', tokenInput?.props.type === 'password');
+check('已保存的密文在标签旁标出“已保存”', byRole('secret-stored').length === 4, `${byRole('secret-stored').length} 个标记`);
+check('“已保存”标记文案正确', byRole('secret-stored').every((node) => flatten(node) === '已保存'));
 
 check('mail.folders 数组转成逗号分隔文本', byField('mail.folders')[0]?.props.value === 'INBOX, Notifications', byField('mail.folders')[0]?.props.value);
 check('mail.provider 渲染成 select 且选中 imap', byField('mail.provider')[0]?.type === 'select' && byField('mail.provider')[0]?.props.value === 'imap');
@@ -552,6 +572,7 @@ check('数字字段仍然是数字', savedConfig?.poll.intervalSeconds === 300 &
 check('勾选框仍然是布尔值', savedConfig?.mail.enabled === false && savedConfig?.poll.autoPull === true);
 check('保存成功显示“已保存”', flatten(byRole('save-msg')[0]).includes('已保存'));
 check('保存后密文重新变回空输入框', byField('canvas.token')[0]?.props.value === '' && byField('canvas.token')[0]?.props.placeholder === '已保存（留空表示不修改）');
+check('保存后密文仍带“已保存”标记', byRole('secret-stored').length === 4, `${byRole('secret-stored').length} 个标记`);
 
 // 测试连接
 els((node) => node.type === 'button' && node.props['data-test'] === 'canvas')[0].props.onClick();
@@ -575,6 +596,53 @@ check('返回后回到任务列表', byClass('ctm-card').length === 3 && byRole(
 // 角标读到同一份 store
 const badgeAfter = renderInst({ component: badge, props: { wide: true }, hooks: [], hookIndex: 0 });
 check('角标显示待办数', flatten(badgeAfter).includes('待办 3'), flatten(badgeAfter));
+
+/* ---------------------------- 宿主没给配置内容时：报错 + 绝不允许保存空表单 */
+
+// 重新加载一份模块实例（store 是模块级状态），模拟“第一次打开设置页就拿到坏载荷”
+configPayloadMode = 'broken';
+const registered2 = new Map();
+const slots2 = {
+  inject(_name, callback) {
+    callback();
+  },
+  register(options, component) {
+    registered2.set(options.name === 'main' ? `main:${options.key}` : `${options.name}:${options.id}`, { options, component });
+    return () => registered2.delete(options.id ?? options.key);
+  },
+};
+let loaded2 = null;
+const window2 = {
+  __ModuleLoader__: {
+    load({ id, factory }) {
+      const require = (name) => {
+        if (name === 'react') return FakeReact;
+        throw new Error(`未预期的 require("${name}")`);
+      };
+      loaded2 = { id, exports: factory(require) };
+      return loaded2.exports;
+    },
+  },
+};
+new Function('window', 'document', 'fetch', 'console', source)(window2, fakeDocument, fakeFetch, console);
+loaded2.exports.apply({ slots: slots2, get: () => undefined, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+
+rootInst = { component: registered2.get('main:canvas-task-monitor').component, props: {}, hooks: [], hookIndex: 0, effects: {}, parent: null, tree: null };
+renderInst(rootInst);
+await settle();
+byRole('settings')[0].props.onClick();
+await settle();
+check('宿主没给配置内容时给出明确错误', flatten(rootInst.tree).includes('宿主没有返回可用的配置内容'), flatten(rootInst.tree).slice(0, 160));
+check('宿主的体检问题照实上屏', byRole('config-problems').length === 1 && flatten(byRole('config-problems')[0]).includes('配置文件损坏'));
+check('读不到配置时不渲染字段', byField('canvas.baseUrl').length === 0);
+check('读不到配置时保存按钮禁用', byRole('save')[0]?.props.disabled === true);
+const savesBefore = calls.filter((call) => call.action === 'save_config').length;
+// 用户点不动这个按钮（disabled），这里直接戳 onClick 验证脚本侧的兜底守卫
+byRole('save')[0].props.onClick();
+await settle();
+check('兜底守卫：读不到配置时拒绝保存', calls.filter((call) => call.action === 'save_config').length === savesBefore, `${calls.filter((call) => call.action === 'save_config').length} 次`);
+check('兜底守卫给出拒绝原因', flatten(byRole('save-msg')[0]).includes('配置还没读取完'), flatten(byRole('save-msg')[0]));
+configPayloadMode = 'wrapped';
 
 console.log(`\npassed: ${passed} failed: ${failures}`);
 process.exit(failures === 0 ? 0 : 1);

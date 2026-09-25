@@ -102,7 +102,9 @@ rollback.bat
 
 里面有 `config.json`（配置，原子写入）和 `tasks.db`（SQLite，WAL 模式）。
 
-**推荐用界面配**：侧边栏「任务」→ 设置页，四组（Canvas / 邮箱 / AI / 拉取与评分），三个「测试连接」按钮分别验 Canvas、邮箱、AI。密钥字段留空表示不修改（回显 `已保存（留空表示不修改）`）。
+**推荐用界面配**：侧边栏「任务」→ 设置页，四组（Canvas / 邮箱 / AI / 拉取与评分），三个「测试连接」按钮分别验 Canvas、邮箱、AI。密钥字段留空表示不修改（输入框里是占位字 `已保存（留空表示不修改）`，字段名旁边还会挂一个 `已保存` 小标）——**看起来是空的并不代表值丢了**，值仍在 `config.json` 里，保存时会原样沿用。
+
+设置页顶部会写明「已读取配置：<路径>」（真读的是哪一份文件）以及宿主的配置体检结果；宿主万一没交出配置内容，页面会直接报出来并**禁用保存**，绝不会拿空表单把磁盘上的值覆盖掉。
 
 也可以直接编辑 `config.json`。注意 `dataDir` 只在 loader 配置里生效（本插件默认不写 loader config），所以想换目录请用环境变量 `CTM_DATA_DIR`：
 
@@ -199,6 +201,8 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 ```
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
+
+`test\client-check.mjs` 的假宿主**照抄真宿主的载荷形状**（`get_config` 回的是 `{ config, dataDir, configPath, configExists, problems }` 这个包装对象），`test\host-check.mjs` 那边还有一条断言把包装对象的键钉死。两边都钉住是有原因的：设置页曾经把包装对象当成配置本身，于是所有字段（学校地址、邮箱账号、模型名…）都渲染成空，看着就像"配置丢了"——而假夹具当时回的是裸配置，所以夹具全绿、真机全空。改夹具之前先改契约，别让夹具比真宿主更宽松。
 
 `test\selftest.ps1` 还额外覆盖三件真机上踩过的事：包装完之后 pnpm **不会**替你删掉 `node_modules\<包名>` 里指向旧目录的符号链接（rollback 自己摘）、`node_modules` 里的条目**必须**解析到本包（指向别的包时 apply 拒绝而不是静默放行）、以及 `"dependencies": {}` 这种全新 profile 的空属性表不会把脚本打崩（`Set-StrictMode -Version Latest` 下的成员枚举会抛 `PropertyNotFoundStrict`）。
 

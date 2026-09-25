@@ -614,6 +614,8 @@ await checkAsync('index: action 层覆盖面板用到的全部方法', async () 
   eq(cfg.data.config.canvas.token, SAVED_SECRET, 'token 必须掩码');
   assert(!JSON.stringify(cfg.data).includes('tok-123'), '不得把真 token 发给浏览器');
   eq(cfg.data.config.canvas.baseUrl, 'https://canvas.test', '非密文字段原样');
+  /* 这条契约要响：面板拿到的是包装对象，必须自己拆一层（曾经因为少拆一层，设置页所有字段都是空的）。 */
+  deepEq(Object.keys(cfg.data).sort(), ['config', 'configExists', 'configPath', 'dataDir', 'problems'], 'get_config 的 data 是包装对象');
 
   // 模拟面板回传：掩码字段原样 + 改一个数值
   const draft = JSON.parse(JSON.stringify(cfg.data.config));
