@@ -46,7 +46,7 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
 ## 3. 评分怎么算
 
 - **规则评分**（本地、离线、永远先跑）：从文本里提取截止时间，按锚点给紧急度，再按关键词（考试、论文、项目、演示、报名、硬性门槛…）给重要度。完全不联网。Canvas 的截止时间由源直接给出，规则评分只做规范化。
-- **关键词按词边界匹配**：英文关键词不再是「包含即命中」——`latest` 不再命中 `test`、`non-final year` 不再命中 `final`；而 `exam` / `test` 这类词还要看**语境**：只有出现在**申请资格**里的（`eligibility criteria` / `requirements` / `HKDSE` / `TOEFL` / `public exams` / `at least level N`…）不算考试——CityU 那种奖学金公告里的「HKDSE English Language Exam」过去被当成「考试/测验类」抬到重要度 4，现在不会了；标题里命中一定算，正文里命中才要过语境；`final` 只在 `final exam/test/quiz/paper/project/report/presentation/assessment` 这种搭配里算考试（`final grade` 说的是成绩）。
+- **关键词按词边界匹配**：英文关键词不再是「包含即命中」——`latest` 不再命中 `test`、`non-final year` 不再命中 `final`；而 `exam` / `test` 这类词还要看**语境**：只有出现在**申请资格**里的（`eligibility criteria` / `requirements` / `HKDSE` / `TOEFL` / `public exams` / `at least level N`…）不算考试——学校奖学金公告里的「HKDSE English Language Exam」过去被当成「考试/测验类」抬到重要度 4，现在不会了；标题里命中一定算，正文里命中才要过语境；`final` 只在 `final exam/test/quiz/paper/project/report/presentation/assessment` 这种搭配里算考试（`final grade` 说的是成绩）。
 - **AI 评分**（`ai.enabled`，默认关）：只对**发生变更**的素材调用一次；模型给出的原始 `score` 会被丢弃并由本插件按公式重算：
 
   ```
@@ -57,7 +57,7 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
   重要度锚点：`0` 纯通知 → `1` 选修低权重 → `2` 一般作业 → `3` 占比 ≥10% 或期中 → `4` 占比 ≥20% 或期末/答辩 → `5` 硬性门槛。
   分类只允许 `assignment` / `activity` / `reminder`，标签只允许 `exam, paper, project, quiz, discussion, rule, deadline_change, group, reading, admin`（最多 5 个），越界一律丢弃。
 - **内容判定会覆盖来源兜底**（公告与邮件；作业类仍以 Canvas 自己的数据为准）：先看正文再定类别与上限——「成绩已发布 / grades have been released / 答案已上传 / 无需操作」这类**信息型通知** → 提醒（重要度封顶 1）；报名/登记/招募 → 提醒；（活动 + 报名）→ 活动；讲座、研讨会、工作坊、比赛、锦标赛、招募 → 活动。「报名成功 / 已为您预留 / registration confirmed」→ 活动，重要度抬 1。命中上限时会**连同按关键词堆起来的理由一起丢掉**，不会出现「信息型公告」旁边还写着「考试/测验类」这种自相矛盾。
-- **不计入总成绩的测验会降权**：`omit_from_final_grade: true` 或 `grading_type: not_graded`，以及**正文里写明**「不计入总成绩 / not counted in the final grade / for practice only」→ 重要度压到 **1**，不再按关键词里的 `quiz/exam` 抬分（成绩公告里的 `quiz` 同理），而且**不会**在「信息型通知」上留下 `exam` / `paper` 这种行动标签。**「0 分」不等于「不计入总成绩」**：0 分但命中硬性要求（`required` / `必修` / `必须完成`…）的条目——CityU 那种 0 分的奖学金申请、必修表格——仍按硬性门槛算 5，只有「0 分且不构成硬性要求」才降权，理由也会分别写成「不计入总成绩」「素材里写明不计入总成绩」「无分值（0 分且非硬性要求）」。
+- **不计入总成绩的测验会降权**：`omit_from_final_grade: true` 或 `grading_type: not_graded`，以及**正文里写明**「不计入总成绩 / not counted in the final grade / for practice only」→ 重要度压到 **1**，不再按关键词里的 `quiz/exam` 抬分（成绩公告里的 `quiz` 同理），而且**不会**在「信息型通知」上留下 `exam` / `paper` 这种行动标签。**「0 分」不等于「不计入总成绩」**：0 分但命中硬性要求（`required` / `必修` / `必须完成`…）的条目——学校发的 0 分奖学金申请、必修表格——仍按硬性门槛算 5，只有「0 分且不构成硬性要求」才降权，理由也会分别写成「不计入总成绩」「素材里写明不计入总成绩」「无分值（0 分且非硬性要求）」。
 - **截止时间怎么判**：邮件先剥掉转发头（发件人/发送时间/收件人/主题）、`>` 引用块和签名——转发头里的「发送时间」不是截止时间；只有紧挨着「截止 / 截止时间 / 到期 / 交 / 提交 / ddl / due / deadline / by / before / no later than」这类词的日期才算 **`deadline`**，没有截止词的日期退化成 **`event`**（活动时间，不算逾期）；早于收信/发布时间 12 小时以上的日期直接丢弃（`dropped`）。
 - **判定版本**：库里的 `assess_revision` 记录判定逻辑版本，本版是 **`2`**。升级后**下一轮拉取会把素材整体重算一次**——窗口里抓到的**全部**素材（即使哈希没变，这一轮才允许调用 AI）**加上**回看窗口之外的老素材（由 `snapshots` 表还原，`raw_json` 不存正文），否则像「30 天前发布的成绩公告」这种永远走不到窗口里、也就永远修不掉。之后恢复「没变更就不调 AI」。
 - **AI 不许推翻内容判定**：素材里写着「成绩已发布 / 不计入总成绩」这类事实时，规则给出的分类与降级后的重要度会**上锁**——AI 可以继续往下调，但不能把它抬回「活动 / 重要 4」（真机实测：`Quiz 3 Grades` 被规则判成「提醒 / 重要 1」，模型看到标题里的 Quiz 又抬了回去，用户投诉的就是这个）。锁只在规则**确实按内容降过级**时生效，普通条目的分类与重要度照旧由 AI 定。

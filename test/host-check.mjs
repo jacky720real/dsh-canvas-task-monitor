@@ -310,17 +310,17 @@ check('scoring: 阈值与标签白名单与客户端一致', () => {
 /* ------------------------- 四条用户实测修正的回归（时间/分类/重要度/报名确认） */
 
 check('scoring: 转发邮件里的"发送时间"不会被当成截止时间', () => {
-  eq(stripQuotedText('发件人: MENDIS\n发送时间: 2026年9月25日 6:11\n收件人: Hall 10 Residents\n\nDear Hall 10 Residents\nMark the dates below:'),
-    'Dear Hall 10 Residents\nMark the dates below:', '转发头必须被剥掉');
+  eq(stripQuotedText('发件人: MENDIS\n发送时间: 2026年9月25日 6:11\n收件人: Hall A Residents\n\nDear Hall A Residents\nMark the dates below:'),
+    'Dear Hall A Residents\nMark the dates below:', '转发头必须被剥掉');
   const draft = ruleAssess(
     {
       source: 'mail',
       external_id: 'imap:63',
       payload: {
-        subject: '转发: [HALL 10] ICFD BASKETBALL RECRUITMENT',
+        subject: '转发: [HALL A] ICFD BASKETBALL RECRUITMENT',
         from: 'Alex Chan <alex.chan@example.edu>',
         receivedDateTime: '2026-09-25T10:29:46+00:00',
-        bodyPreview: '发件人: MENDIS\n发送时间: 2026年9月25日 6:11\n收件人: Hall 10 Residents\n\nDear Hall 10 Residents, two upcoming ICFD basketball events.\nMark the dates below: Oct 5',
+        bodyPreview: '发件人: MENDIS\n发送时间: 2026年9月25日 6:11\n收件人: Hall A Residents\n\nDear Hall A Residents, two upcoming ICFD basketball events.\nMark the dates below: Oct 5',
       },
     },
     { nowMs, weights: { urgencyWeight: 10, importanceWeight: 8 } },
@@ -348,7 +348,7 @@ check('scoring: 成绩已发布的公告按内容归为提醒，不再"重要"',
         title: 'Quiz 3 Grades',
         message: '<p>The grades of Quiz 3 have been released on canvas. The <a href="#">solution</a> is in the files. Contact the TAs if you have questions.</p>',
         posted_at: '2026-09-22T09:08:33Z',
-        course_name: 'GE1362 Exploring Gen AI in Practice',
+        course_name: 'GE1000 Exploring Technology in Practice',
       },
     },
     { nowMs, weights: { urgencyWeight: 10, importanceWeight: 8 } },
@@ -386,7 +386,7 @@ check('scoring: 不计入总成绩的测验不再按"考试"抬分', () => {
 });
 
 check('scoring: 0 分的硬性要求（奖学金申请/必修）不因"0 分"降权', () => {
-  // 真机上这类条目（CityU 的 0 分奖学金申请）曾被抓成 notGraded 掉到重要度 1。
+  // 真机上这类条目（学校发的 0 分奖学金申请）曾被抓成 notGraded 掉到重要度 1。
   const draft = ruleAssess(
     {
       source: 'canvas_assignment',
@@ -477,8 +477,8 @@ check('scoring: 申请资格里的 exam/test 不算考试（奖学金公告实�
   // 真的考试仍然要认出来
   eq(examEvidence('Quiz 3', '成绩已发布').hit, true, '标题里的 quiz');
   eq(examEvidence('Final Exam', '').hit, true, '标题里的 exam');
-  eq(examEvidence('MA1508', 'The final exam counts for 60% of your final grade.').hit, true, 'final exam 搭配');
-  eq(examEvidence('MA1508', 'This course is not counted in your final grade.').hit, false, '只有 final grade 不算考试');
+  eq(examEvidence('MA1000', 'The final exam counts for 60% of your final grade.').hit, true, 'final exam 搭配');
+  eq(examEvidence('MA1000', 'This course is not counted in your final grade.').hit, false, '只有 final grade 不算考试');
   eq(examEvidence('Notice', 'We will hold a quiz next week.').hit, true, '正文里的 quiz');
   eq(examEvidence('Notice', 'Candidates should have at least 2 years of work experience and pass a written exam.').hit, false, '招聘/申请语境');
 });
@@ -865,7 +865,7 @@ check('pipeline: 内容判定的降级不接受 AI 抬回去（成绩公告 / �
       title: 'Quiz 3 Grades',
       message: '<p>The grades of Quiz 3 have been released. The solution is in the files.</p>',
       posted_at: iso(nowMs - 3 * DAY),
-      course_name: 'GE1362',
+      course_name: 'GE1000',
     },
   }, { nowMs });
   eq(infoRule.category, 'reminder', '规则先判成提醒');
@@ -927,7 +927,7 @@ check('pipeline: AI 说"没有截止时间"时要能清掉规则误判的日期�
     external_id: 'imap:63',
     due_at: '2026-09-25T06:11:00.000Z',
     due_kind: 'event',
-    title: 'Hall 10 ICFD 篮球招募活动',
+    title: 'Hall A ICFD 篮球招募活动',
     urgency: 3,
   };
   const merged = mergeDraft(mailRule, { due_at: null, urgency: 0, importance: 1 }, { notBeforeMs: Date.parse('2026-09-25T10:29:46Z') });
@@ -1013,8 +1013,8 @@ check('pipeline: 邮件"报名成功"把旧报名提醒升级成参加，并勾�
   // 用户真机上的形状：中文标题 + 英文转发主题的旧报名任务
   store.upsertTask(seed({
     external_id: 'imap:recruit',
-    title: 'Hall 10 ICFD 篮球招募活动',
-    summary: '转发: [HALL 10] ICFD BASKETBALL RECRUITMENT',
+    title: 'Hall A ICFD 篮球招募活动',
+    summary: '转发: [HALL A] ICFD BASKETBALL RECRUITMENT',
     importance: 1,
     importance_reason: '活动类（需报名）',
   }));
@@ -1033,7 +1033,7 @@ check('pipeline: 邮件"报名成功"把旧报名提醒升级成参加，并勾�
   eq(result.promoted, 1, '升级了一条报名提醒');
   eq(result.completed, 1, '勾掉了确认信本身');
   const promoted = store.getTaskByKey('mail', 'imap:recruit');
-  eq(promoted.title, '参加：Hall 10 ICFD 篮球招募活动', '标题改成"参加"');
+  eq(promoted.title, '参加：Hall A ICFD 篮球招募活动', '标题改成"参加"');
   eq(promoted.category, 'activity', '分类仍是活动');
   eq(promoted.importance, 2, '报名确认后重要度 +1');
   assert(promoted.importance_reason.includes('报名已确认'), promoted.importance_reason);
@@ -1046,7 +1046,7 @@ check('pipeline: 邮件"报名成功"把旧报名提醒升级成参加，并勾�
   const again = syncCompletions('mail', [item], store, { nowIso: iso(nowMs) });
   eq(again.promoted, 0, '已经升过级就不再动');
   eq(again.completed, 0, '已经勾过就不再计数');
-  eq(store.getTaskByKey('mail', 'imap:recruit').title, '参加：Hall 10 ICFD 篮球招募活动', '标题不会被叠加前缀');
+  eq(store.getTaskByKey('mail', 'imap:recruit').title, '参加：Hall A ICFD 篮球招募活动', '标题不会被叠加前缀');
 });
 
 /* ------------------------------------------- 判定升级时重算窗口外的老素材 */
@@ -1070,7 +1070,7 @@ await checkAsync('pipeline: 判定版本升级时，已经落在窗口外的老�
       title: 'Quiz 3 Grades',
       message: '<p>The grades of Quiz 3 have been released on canvas. The solution is in the files.</p>',
       posted_at: iso(nowMs - 30 * DAY),
-      course_name: 'GE1362',
+      course_name: 'GE1000',
     },
   }]);
   // 升级前的旧判定：activity / 重要 4 / tags [exam]
@@ -1080,7 +1080,7 @@ await checkAsync('pipeline: 判定版本升级时，已经落在窗口外的老�
     category: 'activity',
     title: 'Quiz 3 Grades',
     summary: '成绩已发布',
-    course: 'GE1362',
+    course: 'GE1000',
     due_at: null,
     due_kind: '',
     urgency: 0,

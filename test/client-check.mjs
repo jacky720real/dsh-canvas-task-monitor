@@ -215,7 +215,7 @@ function maskSecrets(config) {
  */
 let taskRows = [
   { id: 29, source: 'canvas_assignment', external_id: 'course:70988:assignment:1', category: 'assignment', title: 'Academic Honesty Pledge', summary: '请签署学术诚信承诺书。', course: 'GE1401T42 University English', due_at: iso(-2 * DAY), urgency: 5, importance: 3, score: 97, tags: ['policy'], is_rule: true, urgency_reason: '已逾期', importance_reason: '计入总评', status: 'pending', created_at: iso(-9 * DAY), updated_at: iso(-9 * DAY) },
-  { id: 22, source: 'canvas_announcement', external_id: 'course:70988:announcement:632653', category: 'activity', title: 'Quiz 1 – Lecture 1', summary: '', course: 'GE1362 Exploring Gen AI in Practice', due_at: iso(6 * 3_600_000), urgency: 3, importance: 4, score: 83, tags: [], is_rule: false, urgency_reason: '', importance_reason: '练习', status: 'pending', created_at: iso(-9 * DAY), updated_at: iso(-9 * DAY) },
+  { id: 22, source: 'canvas_announcement', external_id: 'course:70988:announcement:632653', category: 'activity', title: 'Quiz 1 – Lecture 1', summary: '', course: 'GE1000 Exploring Technology in Practice', due_at: iso(6 * 3_600_000), urgency: 3, importance: 4, score: 83, tags: [], is_rule: false, urgency_reason: '', importance_reason: '练习', status: 'pending', created_at: iso(-9 * DAY), updated_at: iso(-9 * DAY) },
   { id: 48, source: 'canvas_announcement', external_id: 'course:1:announcement:9', category: 'reminder', title: 'Reminder: Tasks to complete today', summary: '', course: 'GE1401T42 University English', due_at: null, urgency: 5, importance: 3, score: 71, tags: ['deadline_change', 'admin'], is_rule: false, urgency_reason: '', importance_reason: '', status: 'pending', created_at: iso(-9 * DAY), updated_at: iso(-9 * DAY) },
 ];
 
