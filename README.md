@@ -215,7 +215,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
 
-当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 116 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
+当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 117 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
 
 本版这四条判定修正（转发头时间不是截止时间、分类按内容、不计入总成绩降权、每轮完成对账）**每条都做过伪造对照**：把修复逐项回退到旧行为后，对应断言必须变红——例如关掉「变更门禁之外的完成对账」就报 `pipeline: 只有提交状态变了（哈希不变）也会自动勾掉 → 期望 1，实际 0`；不剥转发头就报 `转发头的发送时间不得成为截止时间：2026-09-25T06:11:00.000Z`；关掉内容分类就报 `期望 "reminder"，实际 "activity"`；关掉降权就报 `期望 1，实际 4`；客户端丢掉 `due_kind` 则三条活动渲染断言一起变红。改这些逻辑前请先跑一遍这套对照。
 

@@ -542,6 +542,11 @@ check('拉取结果说明里带上「转为参加 1 条」', pullText.includes('
 check('拉取结果说明里带上「更新 3 条」', pullText.includes('更新 3 条'), pullText);
 check('拉取结果不把 AI 次数漏掉', pullText.includes('AI 判定 4 次'), pullText);
 check('拉取结果按提示条数标注', pullText.includes('1 条提示'), pullText);
+{
+  const css = styles[0]?.textContent ?? '';
+  const rule = /\.ctm-hint\[data-role="pull-result"\]\s*\{[^}]*margin-left:\s*24px[^}]*margin-right:\s*24px[^}]*\}/;
+  check('拉取结果这一行左右留白，不顶着框边', rule.test(css), css.includes('pull-result') ? '有 pull-result 规则但没对齐' : '样式表里没有 pull-result 规则');
+}
 
 /* ---------------------------------------------------------------- 设置 */
 
