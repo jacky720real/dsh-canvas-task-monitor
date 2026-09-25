@@ -22,9 +22,22 @@
 [CmdletBinding()]
 param(
     [switch]$DryRun,
-    # Only meant for the self-test harness, which points it at a throwaway copy
-    # of the profile. The default is the real profile.
-    [string]$ProfileDir = 'C:\Users\<you>\.dsh\profiles\desktop'
+    # Portable default: <DSH_HOME or ~\.dsh>\profiles\<name>, preferring
+    # "desktop" and otherwise taking the only directory that actually looks like
+    # a profile. A miss still fails later with the full path spelled out, so
+    # -ProfileDir stays the reliable escape hatch. The self-test always passes an
+    # explicit -ProfileDir pointing at a throwaway copy.
+    [string]$ProfileDir = $(
+        $dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.dsh' } else { '' }
+        $profilesRoot = if ($dshHome) { Join-Path $dshHome 'profiles' } else { 'profiles' }
+        $preferred = Join-Path $profilesRoot 'desktop'
+        if (Test-Path -LiteralPath (Join-Path $preferred 'package.json')) { $preferred }
+        else {
+            $found = @(Get-ChildItem -LiteralPath $profilesRoot -Directory -ErrorAction SilentlyContinue |
+                Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'package.json') })
+            if ($found.Count -eq 1) { $found[0].FullName } else { $preferred }
+        }
+    )
 )
 
 Set-StrictMode -Version Latest

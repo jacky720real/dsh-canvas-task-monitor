@@ -19,7 +19,22 @@ const here = dirname(fileURLToPath(import.meta.url));
 /* ------------------------------------------------ 用真 React 校验 API 存在性 */
 
 let realReactVersion = null;
-for (const root of ['D:\\dev\\dsh\\DSH Desktop\\resources\\app\\node_modules', 'C:\\Users/<you>\\.dsh\\profiles\\node_modules']) {
+// Where a real React might live, derived from the environment instead of from one
+// machine's layout (the same discovery idea as cordis-check.mjs). Not finding it
+// is not a failure: the checks that need real React are skipped, and everything
+// else runs against the mini React below.
+const dshHome = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? '', '.dsh');
+const appRoots = [
+  process.env.CTM_DSH_APP,
+  join(process.env.LOCALAPPDATA ?? '', 'Programs', 'DSH Desktop', 'resources', 'app'),
+  join(process.env.LOCALAPPDATA ?? '', 'DSH Desktop', 'resources', 'app'),
+  join(process.env.ProgramFiles ?? '', 'DSH Desktop', 'resources', 'app'),
+].filter((root) => root && !root.startsWith('DSH'));
+const reactRoots = [
+  join(dshHome, 'profiles', 'node_modules'),
+  ...appRoots.map((root) => join(root, 'node_modules')),
+];
+for (const root of reactRoots) {
   try {
     const real = createRequire(join(root, 'noop.js'))('react');
     if (['createElement', 'useState', 'useEffect'].every((name) => typeof real[name] === 'function')) realReactVersion = real.version;

@@ -59,11 +59,13 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
 在**外部终端**（不是 DSH 内的终端）执行：
 
 ```bat
-cd <repo-root>\install
+cd <你克隆下来的仓库>\install
 rollback.bat          :: 仅当该 profile 里还留着上一版插件的快照时才需要
 apply.bat -DryRun     :: 只打印计划，不写任何文件
 apply.bat             :: 真正安装
 ```
+
+脚本里**没有任何写死的路径**：插件目录由脚本自身位置推出（`install\` 的上一级就是包根），profile 由 `%DSH_HOME%`（没设就用 `%USERPROFILE%\.dsh`）下的 `profiles\desktop` 推出 —— 没有 `desktop` 就取那个唯一的、带 `package.json` 的 profile。想手动指定就加 `-ProfileDir <路径>` / `-PluginDir <路径>`（例如 `apply.bat -DryRun -ProfileDir D:\some\.dsh\profiles\work`）。
 
 然后**重启 DSH Desktop**。左侧栏应出现「任务」一行，左下角出现角标。
 
@@ -191,14 +193,14 @@ node test\mail-check.mjs       :: 邮箱连接器：IMAP / Graph / MIME
 node test\sources-check.mjs    :: 来源工厂与纯函数
 node test\cordis-check.mjs     :: 真 cordis 集成：注入 / 挂路由 / 同源围栏 / 拆解（找不到 DSH 自带的 cordis 就跳过）
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps1
-                               :: 安装机器：快照 / 幂等 / 拒绝部分状态 / 残留链接 / 链接身份 / 空依赖表 / 逐字节回滚
+                               :: 安装机器：快照 / 幂等 / 拒绝部分状态 / 残留链接 / 链接身份 / 空依赖表 / 默认路径 / 逐字节回滚
 ```
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
 
 `test\selftest.ps1` 还额外覆盖三件真机上踩过的事：包装完之后 pnpm **不会**替你删掉 `node_modules\<包名>` 里指向旧目录的符号链接（rollback 自己摘）、`node_modules` 里的条目**必须**解析到本包（指向别的包时 apply 拒绝而不是静默放行）、以及 `"dependencies": {}` 这种全新 profile 的空属性表不会把脚本打崩（`Set-StrictMode -Version Latest` 下的成员枚举会抛 `PropertyNotFoundStrict`）。
 
-安装机器夹具是**可移植**的：仓库根由 `$PSScriptRoot` 推出，临时目录取系统 `TEMP`，找不到真实 profile（`$env:DSH_HOME`，否则 `~\.dsh`）时就**合成**一份最小 profile（`dependencies` 为空、`cordis.patch.yml` 带一条 `modlens`），所以在没装 DSH 的机器上跑同一份脚本结果一致（113 项）。
+安装机器夹具是**可移植**的：仓库根由 `$PSScriptRoot` 推出，临时目录取系统 `TEMP`，找不到真实 profile（`$env:DSH_HOME`，否则 `~\.dsh`）时就**合成**一份最小 profile（`dependencies` 为空、`cordis.patch.yml` 带一条 `modlens`），所以在没装 DSH 的机器上跑同一份脚本结果一致（122 项）。其中 T20 专门盯**别人的机器**：不传 `-ProfileDir`，只给一个 `DSH_HOME`，验证默认解析到 `profiles\desktop`（没有就退化为唯一的那个 profile），并且不留下任何快照。
 
 `cordis-check.mjs` 是唯一会用真实依赖的夹具：它加载 DSH 自带的 `@deepseek-ai/cordis`，起一个真插件宿主并把宿主半区装进去，然后用真 `http.Server` 打一遍同源围栏与 action 白名单。cordis 的查找顺序是：环境变量 `CTM_CORDIS`（指向它的 `lib/index.js`）→ `<DSH_HOME>\profiles\node_modules\@deepseek-ai\cordis\lib\index.js` → 常见的 `DSH Desktop\resources\app\node_modules\...`；都没有就打印 `SKIP` 并以 0 退出。
 

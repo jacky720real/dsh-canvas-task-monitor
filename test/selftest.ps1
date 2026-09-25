@@ -285,8 +285,15 @@ Check 'T0 rollback.ps1 keeps no reference to the old Python project' `
     (-not $rollbackStale.Success) ("matched: " + $rollbackStale.Value)
 Check 'T0 apply.ps1 is ASCII-only' (-not ($applyText -match '[^\x00-\x7F]'))
 Check 'T0 rollback.ps1 is ASCII-only' (-not ($rollbackText -match '[^\x00-\x7F]'))
-Check 'T0 apply.ps1 defaults to the published plugin location' `
-    ($applyText -match [regex]::Escape("'<repo-root>'"))
+Check 'T0 apply.ps1 derives -PluginDir from its own location' `
+    ($applyText -match [regex]::Escape('$(Split-Path -Parent $PSScriptRoot)'))
+Check 'T0 the default profile resolves from DSH_HOME in apply.ps1' `
+    ($applyText -match [regex]::Escape('$env:DSH_HOME'))
+Check 'T0 the default profile resolves from DSH_HOME in rollback.ps1' `
+    ($rollbackText -match [regex]::Escape('$env:DSH_HOME'))
+# A published package must not ship one machine's profile path as its default.
+Check 'T0 neither script hard-codes a C:\Users path' `
+    (-not ($applyText -match 'C:\\Users') -and -not ($rollbackText -match 'C:\\Users'))
 Check 'T0 apply.ps1 keeps the Desktop pnpm policy argument' `
     ($applyText -match [regex]::Escape("'--config.minimumReleaseAge=0'"))
 
@@ -567,6 +574,32 @@ Check 'T19 the dry run made no snapshot' (-not (Test-Path -LiteralPath (Join-Pat
 $t19b = Invoke-Step $RollbackScript @('-ProfileDir', $emptyDir)
 Check 'T19 rollback tolerates an empty dependencies object' ($t19b.Code -eq 0) ("code=" + $t19b.Code + " :: " + $t19b.Text)
 Check 'T19 rollback reports nothing to roll back' ($t19b.Text -match 'nothing to roll back') ("text=" + $t19b.Text)
+
+# -------------------------------------------------------------------- T20 ---
+# The shipped default has to work on somebody else's machine: no -ProfileDir at
+# all, only a DSH_HOME. "desktop" wins when it exists; otherwise the single other
+# profile is used. A default that hard-coded one machine's path would pass every
+# other case in this file, because they all pass -ProfileDir explicitly.
+$env:PATH = $SanitizedPath
+$env:APPDATA = Join-Path $Root 'appdata'
+$savedDshHome = $env:DSH_HOME
+foreach ($case in @(
+        @{ Name = 'desktop-preferred'; Directory = 'desktop' },
+        @{ Name = 'single-other'; Directory = 'myprofile' }
+    )) {
+    $caseHome = Join-Path $Root ("home-" + $case.Name)
+    if (Test-Path -LiteralPath $caseHome) { Remove-Item -LiteralPath $caseHome -Recurse -Force }
+    $prof = Join-Path (Join-Path $caseHome 'profiles') $case.Directory
+    New-Item -ItemType Directory -Path $prof -Force | Out-Null
+    foreach ($name in $ProfileFiles) { Copy-Item -LiteralPath (Join-Path $OriginalDir $name) -Destination (Join-Path $prof $name) -Force }
+    $env:DSH_HOME = $caseHome
+    $t20 = Invoke-Step $ApplyScript @('-PluginDir', $PluginFixture, '-DryRun')
+    Check ("T20 default profile resolution: " + $case.Name) ($t20.Code -eq 0 -and $t20.Text -match [regex]::Escape($prof)) ("code=" + $t20.Code + " :: " + $t20.Text)
+    $t20b = Invoke-Step $RollbackScript @()
+    Check ("T20 rollback resolves the same profile: " + $case.Name) ($t20b.Code -eq 0 -and $t20b.Text -match [regex]::Escape($prof)) ("code=" + $t20b.Code + " :: " + $t20b.Text)
+    Check ("T20 no snapshot was written: " + $case.Name) (-not (Test-Path -LiteralPath (Join-Path $prof '.dsh-ctm-snapshot')))
+}
+if ($null -eq $savedDshHome) { Remove-Item Env:DSH_HOME -ErrorAction SilentlyContinue } else { $env:DSH_HOME = $savedDshHome }
 
 $env:APPDATA = Join-Path $Root 'appdata'
 $env:PATH = $SanitizedPath

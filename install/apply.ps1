@@ -31,13 +31,26 @@
 [CmdletBinding()]
 param(
     [switch]$DryRun,
-    # Only meant for the self-test harness, which points it at a throwaway copy
-    # of the profile. The default is the real profile.
-    [string]$ProfileDir = 'C:\Users\<you>\.dsh\profiles\desktop',
-    # The repository root of the plugin - which is the plugin package itself.
-    # This is the published location; the self-test overrides it with a
-    # throwaway copy so it can link that instead.
-    [string]$PluginDir = '<repo-root>'
+    # Portable default: <DSH_HOME or ~\.dsh>\profiles\<name>, preferring
+    # "desktop" and otherwise taking the only directory that actually looks like
+    # a profile. A miss still fails later with the full path spelled out, so
+    # -ProfileDir stays the reliable escape hatch. The self-test always passes an
+    # explicit -ProfileDir pointing at a throwaway copy.
+    [string]$ProfileDir = $(
+        $dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.dsh' } else { '' }
+        $profilesRoot = if ($dshHome) { Join-Path $dshHome 'profiles' } else { 'profiles' }
+        $preferred = Join-Path $profilesRoot 'desktop'
+        if (Test-Path -LiteralPath (Join-Path $preferred 'package.json')) { $preferred }
+        else {
+            $found = @(Get-ChildItem -LiteralPath $profilesRoot -Directory -ErrorAction SilentlyContinue |
+                Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'package.json') })
+            if ($found.Count -eq 1) { $found[0].FullName } else { $preferred }
+        }
+    ),
+    # The repository root is the plugin package itself: this script lives in
+    # <repo>\install, so the parent of $PSScriptRoot is right on any machine.
+    # The self-test overrides it with a throwaway copy so it can link that.
+    [string]$PluginDir = $(Split-Path -Parent $PSScriptRoot)
 )
 
 Set-StrictMode -Version Latest
@@ -45,8 +58,8 @@ $ErrorActionPreference = 'Stop'
 
 $DepName       = 'dsh-canvas-task-monitor'
 # Derived from $PluginDir so an overridden -PluginDir is also the directory the
-# package manager is told to link; with the default it is exactly
-# link:<repo-root>.
+# package manager is told to link; with the defaults it is exactly
+# link:<path of the repository that contains this script>.
 $DepSpec       = 'link:' + $PluginDir.Replace('\', '/')
 $LoaderId      = 'canvas-task-monitor'
 $SnapshotDir   = Join-Path $ProfileDir '.dsh-ctm-snapshot'
