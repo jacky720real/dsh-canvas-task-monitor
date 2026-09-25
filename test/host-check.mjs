@@ -12,8 +12,8 @@ import { join } from 'node:path';
 import { defaultConfig, loadConfig, maskSecrets, mergeSecrets, normalizeConfig, saveConfig, resolveDataDir, validateConfig, SECRET_PATHS, SAVED_SECRET, dbPathIn } from '../lib/config.js';
 import { openStore, isAvailable as sqliteAvailable } from '../lib/store.js';
 import { isTrustedWebRequest, createHandlers, Runtime, toPublicTask } from '../lib/index.js';
-import { HASH_FIELDS, detectChanges, hashItem, mergeDraft, pollOnce, testSource } from '../lib/pipeline.js';
-import { computeScore, ruleAssess, sortTasks, urgencyFromDue, extractDueDate, stripHtml, HIGH_URGENCY, HIGH_IMPORTANCE, TAG_WHITELIST } from '../lib/scoring.js';
+import { HASH_FIELDS, detectChanges, hashItem, mergeDraft, pollOnce, submissionVerdict, syncCompletions, testSource } from '../lib/pipeline.js';
+import { computeScore, ruleAssess, sortTasks, urgencyFromDue, extractDueDate, analyzeDueDate, stripQuotedText, classifyByContent, isRegistrationConfirmation, stripHtml, HIGH_URGENCY, HIGH_IMPORTANCE, TAG_WHITELIST } from '../lib/scoring.js';
 import { aiConfigured, buildSystemPrompt, buildUserPrompt, callChat, extractTasks, sanitizeDraft, scoreItems, testAi, stripCodeFence } from '../lib/llm.js';
 import { canonicalHash, parseDateMs, utcNowIso, truncate } from '../lib/util.js';
 
@@ -307,6 +307,100 @@ check('scoring: 阈值与标签白名单与客户端一致', () => {
   eq(TAG_WHITELIST.length, 10, '白名单长度');
 });
 
+/* ------------------------- 四条用户实测修正的回归（时间/分类/重要度/报名确认） */
+
+check('scoring: 转发邮件里的"发送时间"不会被当成截止时间', () => {
+  eq(stripQuotedText('发件人: MENDIS\n发送时间: 2026年9月25日 6:11\n收件人: Hall 10 Residents\n\nDear Hall 10 Residents\nMark the dates below:'),
+    'Dear Hall 10 Residents\nMark the dates below:', '转发头必须被剥掉');
+  const draft = ruleAssess(
+    {
+      source: 'mail',
+      external_id: 'imap:63',
+      payload: {
+        subject: '转发: [HALL 10] ICFD BASKETBALL RECRUITMENT',
+        from: 'Alex Chan <alex.chan@example.edu>',
+        receivedDateTime: '2026-09-25T10:29:46+00:00',
+        bodyPreview: '发件人: MENDIS\n发送时间: 2026年9月25日 6:11\n收件人: Hall 10 Residents\n\nDear Hall 10 Residents, two upcoming ICFD basketball events.\nMark the dates below: Oct 5',
+      },
+    },
+    { nowMs, weights: { urgencyWeight: 10, importanceWeight: 8 } },
+  );
+  assert(draft.due_at !== iso(Date.UTC(2026, 8, 25, 6, 11)), `转发头的发送时间不得成为截止时间：${draft.due_at}`);
+  eq(draft.due_kind, 'event', '唯一像日期的只当活动时间');
+  assert(draft.urgency <= 2, `活动时间不得算紧急：${draft.urgency}`);
+  assert(!draft.urgency_reason.includes('已逾期'), draft.urgency_reason);
+  eq(draft.category, 'activity', '招募类邮件归活动');
+});
+
+check('scoring: 早于收信时间的日期直接丢弃', () => {
+  const analyzed = analyzeDueDate('截止 2026-09-01', { nowMs, notBeforeMs: Date.UTC(2026, 8, 25, 10, 29) });
+  eq(analyzed.due_at, null, '引用历史里的旧日期不该变成已截止');
+  eq(analyzed.dropped, true, '标记为已丢弃');
+});
+
+check('scoring: 成绩已发布的公告按内容归为提醒，不再"重要"', () => {
+  const draft = ruleAssess(
+    {
+      source: 'canvas_announcement',
+      external_id: 'course:70800:announcement:635075',
+      course_id: '70800',
+      payload: {
+        title: 'Quiz 3 Grades',
+        message: '<p>The grades of Quiz 3 have been released on canvas. The <a href="#">solution</a> is in the files. Contact the TAs if you have questions.</p>',
+        posted_at: '2026-09-22T09:08:33Z',
+        course_name: 'GE1362 Exploring Gen AI in Practice',
+      },
+    },
+    { nowMs, weights: { urgencyWeight: 10, importanceWeight: 8 } },
+  );
+  eq(draft.category, 'reminder', '信息型公告是提醒，不是活动');
+  eq(draft.importance, 1, '成绩已发布不需要动作');
+  assert(draft.importance_reason.includes('信息型公告'), draft.importance_reason);
+  assert(!draft.importance_reason.includes('考试/测验类'), `理由不能自相矛盾：${draft.importance_reason}`);
+});
+
+check('scoring: 不计入总成绩的测验不再按"考试"抬分', () => {
+  const draft = ruleAssess(
+    {
+      source: 'canvas_assignment',
+      external_id: 'course:1:assignment:77',
+      course_id: '1',
+      payload: {
+        name: 'Practice Quiz 1',
+        description: '<p>Practice quiz, does not count toward your final grade.</p>',
+        due_at: iso(nowMs + 2 * DAY),
+        points_possible: 0,
+        submission_types: ['online_quiz'],
+        grading_type: 'not_graded',
+        omit_from_final_grade: true,
+        course_name: 'Course A',
+      },
+    },
+    { nowMs, weights: { urgencyWeight: 10, importanceWeight: 8 } },
+  );
+  eq(draft.category, 'assignment', '作业来源仍是作业');
+  eq(draft.importance, 1, '不计入总成绩 → 重要度压到 1');
+  assert(draft.importance_reason.includes('不计入总成绩'), draft.importance_reason);
+  assert(draft.score < 40, `不该是高优先级：${draft.score}`);
+});
+
+check('scoring: "报名成功"的邮件按内容归为活动', () => {
+  const text = '报名成功：AI 讲座\n您已成功报名参加本次讲座，请准时出席。';
+  eq(isRegistrationConfirmation(text), true, '识别为报名确认');
+  eq(classifyByContent('mail', text).category, 'activity', '确认类邮件归活动');
+  eq(classifyByContent('mail', text).floor, 2, '重要度下限 2');
+  eq(classifyByContent('mail', '网易邮箱安全提醒：请及时修改密码').category, 'reminder', '系统通知仍是提醒');
+});
+
+check('scoring: 已经过去的活动排到"无时间"那组', () => {
+  const rows = [
+    { id: 1, due_at: iso(nowMs - 2 * DAY), due_kind: 'event', importance: 5, urgency: 0, score: 40 },
+    { id: 2, due_at: iso(nowMs + 3 * DAY), due_kind: 'deadline', importance: 1, urgency: 3, score: 38 },
+    { id: 3, due_at: iso(nowMs + DAY), due_kind: 'event', importance: 2, urgency: 2, score: 36 },
+  ];
+  deepEq(sortTasks(rows).map((row) => row.id), [3, 2, 1], '未来活动按时间；过去活动排最后');
+});
+
 /* ------------------------------------------------------------ llm */
 
 const aiConfig = normalizeConfig({ ai: { enabled: true, baseUrl: 'https://ai.test/v1', apiKey: 'k', model: 'm', batchSize: 5 } }).ai;
@@ -570,10 +664,141 @@ check('pipeline: Canvas 的权威 due_at 不接受 AI 覆盖，邮箱仍由 AI �
     'AI 标题', '其它字段照旧由 AI 覆盖');
   const canvasNoDue = { source: 'canvas_assignment', external_id: 'x', due_at: '', title: 't', urgency: 0 };
   eq(mergeDraft(canvasNoDue, { due_at: '2026-10-02T00:00:00+08:00' }).due_at,
-    '2026-10-02T00:00:00+08:00', '源没有截止时间时 AI 可以补');
+    '2026-10-01T16:00:00.000Z', '源没有截止时间时 AI 可以补（补进来的时间统一归一成 UTC ISO）');
+  eq(mergeDraft(canvasNoDue, { due_at: '2026-10-02T00:00:00+08:00' }).due_kind,
+    'deadline', 'AI 补的时间按截止时间对待');
   const mailRule = { source: 'mail', external_id: 'imap:1', due_at: null, title: 't', urgency: 0 };
   eq(mergeDraft(mailRule, { due_at: '2026-10-02T00:00:00+08:00' }).due_at,
-    '2026-10-02T00:00:00+08:00', '邮箱的截止时间本来就只能靠 AI 推断');
+    '2026-10-01T16:00:00.000Z', '邮箱的截止时间本来就只能靠 AI 推断');
+});
+
+check('pipeline: AI 说"没有截止时间"时要能清掉规则误判的日期（转发头 bug）', () => {
+  // 用户实测：篮球招募邮件是转发来的，转发头里的"发送时间"被规则当成截止时间 → 显示已逾期
+  const mailRule = {
+    source: 'mail',
+    external_id: 'imap:63',
+    due_at: '2026-09-25T06:11:00.000Z',
+    due_kind: 'event',
+    title: 'Hall 10 ICFD 篮球招募活动',
+    urgency: 3,
+  };
+  const merged = mergeDraft(mailRule, { due_at: null, urgency: 0, importance: 1 }, { notBeforeMs: Date.parse('2026-09-25T10:29:46Z') });
+  eq(merged.due_at, null, 'AI 判定没有明确截止时间时，规则那个"第一个像日期的"必须清掉');
+  eq(merged.due_kind, '', 'due_kind 一起清掉，否则前端还会当成截止时间算逾期');
+  // 反过来：日期有截止词支撑（due_kind === deadline）时，AI 的空值不得清掉它
+  const strong = { source: 'mail', external_id: 'imap:64', due_at: '2026-09-30T15:59:00.000Z', due_kind: 'deadline', title: 'x', urgency: 4 };
+  eq(mergeDraft(strong, { due_at: null }, { notBeforeMs: Date.parse('2026-09-25T10:29:46Z') }).due_at,
+    '2026-09-30T15:59:00.000Z', '有截止词的日期比模型的一句话硬');
+  // AI 从引用历史里抄出来的旧日期：比收信时间还早 → 丢掉
+  const stale = mergeDraft(mailRule, { due_at: '2026-09-20T06:11:00.000Z' }, { notBeforeMs: Date.parse('2026-09-25T10:29:46Z') });
+  eq(stale.due_at, null, '早于收信时间 12 小时以上的日期不得写进库');
+  // 作业的权威 due_at 仍然一句话都不许改
+  eq(mergeDraft({ source: 'canvas_assignment', external_id: 'a', due_at: '2026-09-30T15:59:00.000Z', due_kind: 'deadline' }, { due_at: null }).due_at,
+    '2026-09-30T15:59:00.000Z', '作业截止时间永远由 Canvas 说话');
+});
+
+/* --------------------------------------------- 自动完成（Canvas 提交 / 邮件确认） */
+
+check('pipeline: submissionVerdict 只认客观的"我交了"', () => {
+  const base = { payload: { submission_types: ['online_upload'] } };
+  eq(submissionVerdict({ ...base, payload: { ...base.payload, submission: null } }).done, false, '没有 submission → 没交');
+  eq(submissionVerdict({ ...base, payload: { ...base.payload, submission: { workflow_state: 'unsubmitted', submitted_at: null } } }).done, false, 'unsubmitted → 没交');
+  const submitted = submissionVerdict({ ...base, payload: { ...base.payload, submission: { workflow_state: 'submitted', submitted_at: iso(nowMs - DAY) } } });
+  eq(submitted.done, true, '有 submitted_at → 已交');
+  eq(submitted.reason, 'Canvas 已提交', '理由文案');
+  eq(submissionVerdict({ ...base, payload: { ...base.payload, submission: { workflow_state: 'graded', submitted_at: null } } }).done, true, '已评分也算交了');
+  eq(submissionVerdict({ ...base, payload: { ...base.payload, submission: { workflow_state: 'submitted', submitted_at: null, excused: true } } }).done, false, '免修不算我做的');
+  eq(submissionVerdict({ payload: { submission_types: ['none'], submission: { workflow_state: 'submitted', submitted_at: iso(nowMs) } } }).done, false, '无需提交的条目不该被划掉');
+});
+
+await checkAsync('pipeline: 只有提交状态变了（哈希不变）也会自动勾掉', async () => {
+  const dir = join(root, 'store-complete');
+  const state = baseState();
+  const config = normalizeConfig({ canvas: { enabled: true, baseUrl: 'https://canvas.test', token: 't' } });
+  const first = await runPoll(dir, config, state);
+  const before = first.store.getTaskByKey('canvas_assignment', 'course:1:assignment:11');
+  eq(before.status, 'pending', '首轮是待办');
+  eq(first.stats.completed, 0, '首轮没有可勾的');
+
+  // 只改 submission（不在哈希白名单里）→ 下一轮"没有变更"，但依然必须自动勾掉
+  state.assignments[1][0].submission = { workflow_state: 'submitted', submitted_at: iso(nowMs - DAY) };
+  const second = await runPoll(dir, config, state);
+  eq(second.stats.changes, 0, '提交状态不参与哈希 → 没有变更');
+  eq(second.stats.completed, 1, '没有变更也要同步完成状态（这条曾经被变更门禁挡住）');
+  const after = second.store.getTaskByKey('canvas_assignment', 'course:1:assignment:11');
+  eq(after.status, 'done', '自动划掉');
+  eq(after.status_source, 'canvas', '记录是客观信号勾的');
+  eq(after.status_note, 'Canvas 已提交', '写清完成方式');
+
+  // 用户手动取消勾选 → 之后任何一轮都不得再自动勾回去
+  second.store.setStatus(after.id, 'pending');
+  const third = await runPoll(dir, config, state);
+  const kept = third.store.getTaskByKey('canvas_assignment', 'course:1:assignment:11');
+  eq(kept.status, 'pending', '用户取消后必须留得住');
+  eq(kept.status_source, 'user', '状态来源记为 user');
+  eq(third.stats.completed, 0, '不得再自动完成');
+});
+
+check('pipeline: 邮件"报名成功"把旧报名提醒升级成参加，并勾掉确认信本身', () => {
+  const dir = join(root, 'store-confirm');
+  const store = openStore(dbPathIn(dir));
+  const seed = (over) => ({
+    source: 'mail',
+    external_id: 'imap:x',
+    category: 'reminder',
+    title: 't',
+    summary: '',
+    course: '',
+    due_at: null,
+    due_kind: '',
+    urgency: 0,
+    importance: 1,
+    score: 8,
+    tags: [],
+    is_rule: false,
+    urgency_reason: '',
+    importance_reason: '',
+    status: 'pending',
+    raw_json: '',
+    ...over,
+  });
+  // 用户真机上的形状：中文标题 + 英文转发主题的旧报名任务
+  store.upsertTask(seed({
+    external_id: 'imap:recruit',
+    title: 'Hall 10 ICFD 篮球招募活动',
+    summary: '转发: [HALL 10] ICFD BASKETBALL RECRUITMENT',
+    importance: 1,
+    importance_reason: '活动类（需报名）',
+  }));
+  store.upsertTask(seed({ external_id: 'imap:confirm', title: 'Registration Confirmed: ICFD Basketball Recruitment' }));
+
+  const item = {
+    source: 'mail',
+    external_id: 'imap:confirm',
+    payload: {
+      subject: 'Registration Confirmed: ICFD Basketball Recruitment',
+      bodyPreview: 'Dear student, your registration for the ICFD Basketball Recruitment has been confirmed.',
+      receivedDateTime: iso(nowMs),
+    },
+  };
+  const result = syncCompletions('mail', [item], store, { nowIso: iso(nowMs) });
+  eq(result.promoted, 1, '升级了一条报名提醒');
+  eq(result.completed, 1, '勾掉了确认信本身');
+  const promoted = store.getTaskByKey('mail', 'imap:recruit');
+  eq(promoted.title, '参加：Hall 10 ICFD 篮球招募活动', '标题改成"参加"');
+  eq(promoted.category, 'activity', '分类仍是活动');
+  eq(promoted.importance, 2, '报名确认后重要度 +1');
+  assert(promoted.importance_reason.includes('报名已确认'), promoted.importance_reason);
+  eq(promoted.status, 'pending', '旧的报名项不是"我做完的事"，保持待办');
+  const confirmTask = store.getTaskByKey('mail', 'imap:confirm');
+  eq(confirmTask.status, 'done', '确认信本身自动完成');
+  eq(confirmTask.status_source, 'mail', '来源是邮件客观信号');
+
+  // 幂等：再跑一次不得重复升级、也不得重复计数
+  const again = syncCompletions('mail', [item], store, { nowIso: iso(nowMs) });
+  eq(again.promoted, 0, '已经升过级就不再动');
+  eq(again.completed, 0, '已经勾过就不再计数');
+  eq(store.getTaskByKey('mail', 'imap:recruit').title, '参加：Hall 10 ICFD 篮球招募活动', '标题不会被叠加前缀');
 });
 
 /* ------------------------------------------------------------ index action 层 */

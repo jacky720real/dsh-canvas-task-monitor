@@ -226,14 +226,17 @@ async function fakeFetch(url, init) {
   const respond = (data) => ({ ok: true, status: 200, json: async () => ({ ok: true, data }) });
 
   if (body.action === 'summarize_pending') {
+    /* 与 lib/store.js 的 summarize 一致：due_kind === 'event'（活动举行时间）不计入
+       已逾期 / 今天截止，否则刚收到的活动邮件一进来就显示“已逾期”。 */
     const pending = taskRows.filter((task) => task.status !== 'done');
+    const dated = pending.filter((task) => task.due_kind !== 'event' && Number.isFinite(Date.parse(task.due_at)));
     return respond({
       total: pending.length,
       assignment: pending.filter((t) => t.category === 'assignment').length,
       activity: pending.filter((t) => t.category === 'activity').length,
       reminder: pending.filter((t) => t.category === 'reminder').length,
-      overdue: pending.filter((t) => typeof t.due_at === 'string' && Date.parse(t.due_at) < Date.now()).length,
-      dueToday: pending.filter((t) => typeof t.due_at === 'string' && Date.parse(t.due_at) >= Date.now() && Date.parse(t.due_at) - Date.now() < DAY).length,
+      overdue: dated.filter((t) => Date.parse(t.due_at) < Date.now()).length,
+      dueToday: dated.filter((t) => Date.parse(t.due_at) >= Date.now() && Date.parse(t.due_at) - Date.now() < DAY).length,
       max_urgency: 5,
     });
   }
@@ -243,7 +246,24 @@ async function fakeFetch(url, init) {
     taskRows = taskRows.map((task) => (task.id === body.params.task_id ? { ...task, status: body.params.done ? 'done' : 'pending' } : task));
     return respond({ ...taskRows.find((task) => task.id === body.params.task_id) });
   }
-  if (body.action === 'poll_now') return respond({ fetched: 3, created: 0, updated: 1, unchanged: 2, durationMs: 12, sources: [{ source: 'canvas', ok: true, message: 'OK' }] });
+  /* 真宿主 poll_now 的 data 是 pipeline.pollOnce 的 stats（见 lib/pipeline.js）。 */
+  if (body.action === 'poll_now') {
+    return respond({
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+      duration_ms: 12,
+      sources: 2,
+      changes: 3,
+      tasks: 1,
+      completed: 2,
+      promoted: 1,
+      rescored: 0,
+      llm_calls: 4,
+      ai_used: true,
+      errors: [],
+      warnings: ['Canvas：已自动完成（Canvas 已提交）：Essay 1'],
+    });
+  }
   /* 真宿主 get_config 的 data 是 { config, dataDir, configPath, configExists, problems }，
      不是裸配置（lib/index.js 的 handler 与这里必须一致，否则面板会渲染成空）。 */
   if (body.action === 'get_config') {
@@ -514,6 +534,14 @@ check('找到拉取按钮', pullButton !== undefined);
 pullButton.props.onClick();
 await settle();
 check('拉取调用了 poll_now', calls.some((call) => call.action === 'poll_now'));
+const pullResult = byRole('pull-result')[0];
+check('拉取后显示本轮结果（含自动完成/转参加）', pullResult !== undefined, '没有 pull-result');
+const pullText = flatten(pullResult);
+check('拉取结果说明里带上「自动完成 2 条」', pullText.includes('自动完成 2 条'), pullText);
+check('拉取结果说明里带上「转为参加 1 条」', pullText.includes('转为参加 1 条'), pullText);
+check('拉取结果说明里带上「更新 3 条」', pullText.includes('更新 3 条'), pullText);
+check('拉取结果不把 AI 次数漏掉', pullText.includes('AI 判定 4 次'), pullText);
+check('拉取结果按提示条数标注', pullText.includes('1 条提示'), pullText);
 
 /* ---------------------------------------------------------------- 设置 */
 
@@ -596,6 +624,86 @@ check('返回后回到任务列表', byClass('ctm-card').length === 3 && byRole(
 // 角标读到同一份 store
 const badgeAfter = renderInst({ component: badge, props: { wide: true }, hooks: [], hookIndex: 0 });
 check('角标显示待办数', flatten(badgeAfter).includes('待办 3'), flatten(badgeAfter));
+
+/* --------------------------- 活动时间不是截止时间 + 自动完成的“完成方式” */
+
+taskRows = [
+  {
+    id: 901,
+    source: 'mail',
+    external_id: 'imap:event',
+    category: 'activity',
+    title: 'ICFD Basketball Seminar',
+    summary: '讲座：ICFD 篮球活动说明会。',
+    course: '',
+    due_at: iso(-2 * DAY),
+    due_kind: 'event',
+    urgency: 0,
+    importance: 2,
+    score: 16,
+    tags: [],
+    is_rule: false,
+    urgency_reason: '活动时间已过（不是截止时间）',
+    importance_reason: '活动类（需报名）',
+    status: 'pending',
+    created_at: iso(-9 * DAY),
+    updated_at: iso(-9 * DAY),
+  },
+  {
+    id: 902,
+    source: 'canvas_assignment',
+    external_id: 'course:1:assignment:9',
+    category: 'assignment',
+    title: 'Essay 2',
+    summary: '',
+    course: 'GE1401T42 University English',
+    due_at: iso(2 * DAY),
+    due_kind: 'deadline',
+    urgency: 3,
+    importance: 3,
+    score: 58,
+    tags: [],
+    is_rule: false,
+    urgency_reason: '',
+    importance_reason: '',
+    status: 'done',
+    status_source: 'canvas',
+    status_note: 'Canvas 已提交',
+    created_at: iso(-9 * DAY),
+    updated_at: iso(-9 * DAY),
+  },
+];
+rootInst = { component: panel, props: {}, hooks: [], hookIndex: 0, effects: {}, parent: null, tree: null };
+renderInst(rootInst);
+await settle();
+// store 是模块级的：重新挂载不会自动重读（lib/client.js 里 `if (!store.value.loaded …)`），
+// 必须点一次「刷新」才会把新的 taskRows 读进来。
+buttonWith('ctm-btn', '刷新').props.onClick();
+await settle();
+const eventBody = flatten(rootInst.tree);
+check(
+  '活动行显示“活动已过”而不是“已逾期”徽标',
+  eventBody.includes('活动已过') && byClass('ctm-flag').every((node) => flatten(node) !== '已逾期'),
+  eventBody.slice(0, 200),
+);
+check('活动时间不进“已逾期”统计', eventBody.includes('已逾期 0'), eventBody.slice(0, 200));
+check('活动行的元信息用“活动 …”前缀', eventBody.includes('活动 9月23日（活动已过）') || /活动 \d+月\d+日（活动已过）/.test(eventBody), eventBody.slice(0, 200));
+
+byRole('show-done')[0].props.onChange({ target: { checked: true } });
+await settle();
+const doneCard = cardOf('Essay 2')[0];
+check('显示已完成后能看到自动勾掉的作业', doneCard !== undefined);
+doneCard.props.onClick();
+await settle();
+const doneBody = flatten(rootInst.tree);
+check('自动完成的任务标出“完成方式：Canvas 已提交”', doneBody.includes('完成方式：') && doneBody.includes('Canvas 已提交'), doneBody.slice(0, 240));
+check('自动完成的任务不谎称是用户勾的', !doneBody.includes('完成方式：用户勾选'), doneBody.slice(0, 240));
+const eventCard = cardOf('ICFD Basketball Seminar')[0];
+eventCard.props.onClick();
+await settle();
+const eventDetail = flatten(rootInst.tree);
+check('活动的展开行用“活动时间：”而不是“截止时间：”', eventDetail.includes('活动时间：') && !eventDetail.includes('截止时间：'), eventDetail.slice(0, 240));
+check('活动行详情里没有“已逾期”徽标', byClass('ctm-flag').every((node) => flatten(node) !== '已逾期'));
 
 /* ---------------------------- 宿主没给配置内容时：报错 + 绝不允许保存空表单 */
 

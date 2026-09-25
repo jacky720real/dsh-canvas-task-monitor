@@ -285,6 +285,20 @@ const ASSIGNMENT_101_PAGE_1 = [
     due_at: '2026-09-30T23:59:00Z',
     points_possible: 10,
     submission_types: ['online_text_entry'],
+    omit_from_final_grade: false,
+    grading_type: 'online_text_entry',
+    quiz_id: null,
+    // 真 Canvas 的 submission 对象很大：只允许收窄后的 4 个键进 payload
+    submission: {
+      id: 9001,
+      workflow_state: 'submitted',
+      submitted_at: '2026-09-20T10:00:00Z',
+      graded_at: null,
+      excused: false,
+      attempt: 1,
+      attachments: [{ id: 1, url: 'https://example.invalid/a' }],
+      submission_comments: [{ id: 2, comment: '很好' }],
+    },
   },
   {
     id: 2,
@@ -535,9 +549,35 @@ deepEq('external_id 完全一致（含跳过项都不在）', ids, EXPECTED_IDS)
     due_at: '2026-09-30T23:59:00Z',
     points_possible: 10,
     submission_types: ['online_text_entry'],
+    omit_from_final_grade: false,
+    grading_type: 'online_text_entry',
+    quiz_id: null,
+    submission: {
+      workflow_state: 'submitted',
+      submitted_at: '2026-09-20T10:00:00Z',
+      graded_at: null,
+      excused: false,
+    },
     course_name: '课程甲',
   });
-  eq('作业 payload 恰好 6 个键', Object.keys(found.payload).length, 6);
+  eq('作业 payload 恰好 10 个键', Object.keys(found.payload).length, 10);
+  deepEq(
+    'submission 只留 4 个键（不把整包塞进 payload）',
+    Object.keys(found.payload.submission).sort(),
+    ['excused', 'graded_at', 'submitted_at', 'workflow_state'],
+  );
+}
+
+{
+  // 自动完成靠这个：请求必须带 include[]=submission，否则永远读不到提交状态
+  const assignmentUrls = canvas.state.seen.filter((url) => /\/assignments/.test(url));
+  const builtUrls = assignmentUrls.filter((url) => url.includes('per_page=100'));
+  ok('至少请求过一次作业接口', assignmentUrls.length >= 2, show(assignmentUrls));
+  ok(
+    '每次作业请求都带 include[]=submission',
+    builtUrls.length >= 5 && builtUrls.every((url) => url.includes('include[]=submission')),
+    show(assignmentUrls),
+  );
 }
 
 {
@@ -548,6 +588,10 @@ deepEq('external_id 完全一致（含跳过项都不在）', ids, EXPECTED_IDS)
     due_at: null,
     points_possible: null,
     submission_types: [],
+    omit_from_final_grade: false,
+    grading_type: null,
+    quiz_id: null,
+    submission: null,
     course_name: '课程甲',
   });
 }

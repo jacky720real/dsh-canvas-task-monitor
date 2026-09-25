@@ -165,15 +165,15 @@ const URLS = {
   coursesP1: `${BASE}/api/v1/courses?enrollment_state=active&per_page=100`,
   coursesP2: `${BASE}/api/v1/courses?page=2`,
   probe: `${BASE}/api/v1/courses?enrollment_state=active&per_page=1`,
-  assignments101: `${BASE}/api/v1/courses/101/assignments?per_page=100`,
+  assignments101: `${BASE}/api/v1/courses/101/assignments?per_page=100&include[]=submission`,
   assignments101P2: `${BASE}/api/v1/courses/101/assignments?per_page=100&page=2`,
   assignments101Last: `${BASE}/api/v1/courses/101/assignments?per_page=100&page=9`,
   announcements101: `${BASE}/api/v1/announcements?context_codes[]=course_101&per_page=100`,
-  assignments202: `${BASE}/api/v1/courses/202/assignments?per_page=100`,
+  assignments202: `${BASE}/api/v1/courses/202/assignments?per_page=100&include[]=submission`,
   announcements202: `${BASE}/api/v1/announcements?context_codes[]=course_202&per_page=100`,
-  assignments303: `${BASE}/api/v1/courses/303/assignments?per_page=100`,
+  assignments303: `${BASE}/api/v1/courses/303/assignments?per_page=100&include[]=submission`,
   announcements303: `${BASE}/api/v1/announcements?context_codes[]=course_303&per_page=100`,
-  assignments404: `${BASE}/api/v1/courses/404/assignments?per_page=100`,
+  assignments404: `${BASE}/api/v1/courses/404/assignments?per_page=100&include[]=submission`,
   announcements404: `${BASE}/api/v1/announcements?context_codes[]=course_404&per_page=100`,
 };
 
@@ -373,7 +373,11 @@ async function main() {
   eq('course_name 取 course.name', a4.payload.course_name, '数据结构');
   eq('course_name 回退到 course_code', byId('course:202:assignment:77').payload.course_name, 'CS202');
   eq('course_name 回退到 code', byId('course:404:assignment:55').payload.course_name, 'CODE404');
-  eq('作业 payload 只含约定的 6 个键', Object.keys(a4.payload).join(','), 'name,description,due_at,points_possible,submission_types,course_name');
+  eq(
+    '作业 payload 只含约定的 10 个键（含 3 个不参与哈希的补充字段）',
+    Object.keys(a4.payload).join(','),
+    'name,description,due_at,points_possible,submission_types,omit_from_final_grade,grading_type,quiz_id,submission,course_name',
+  );
   eq('公告 payload 只含约定的 4 个键', Object.keys(an3.payload).join(','), 'title,message,posted_at,course_name');
   eq('单对象响应的公告 id 正常', byId('course:202:announcement:88').external_id, 'course:202:announcement:88');
 
