@@ -149,19 +149,24 @@ const MESSAGE_2_RESPONSE = MESSAGE_2_FRAGMENT + 'a4 OK FETCH completed\r\n';
 
 /**
  * 一次 FETCH 命令的完整响应：两封邮件一个字面量一个，**整段只有一条完成行**
- * （就是最后的 `a4 OK`）。中间不许再夹带任何带标记的 OK/NO/BAD。
+ * （就是最后的 `a5 OK`）。中间不许再夹带任何带标记的 OK/NO/BAD。
  */
-const FETCH_RESPONSE = MESSAGE_1_FRAGMENT + MESSAGE_2_FRAGMENT + 'a4 OK FETCH completed\r\n';
+const FETCH_RESPONSE = MESSAGE_1_FRAGMENT + MESSAGE_2_FRAGMENT + 'a5 OK FETCH completed\r\n';
 
 /** 单封失败用例用的载荷：只有头、没有空行也没有正文 → 该序号应被跳过（警告）。 */
 const BODYLESS_MESSAGE = 'Message-ID: <BODYLESS-1@school.example.edu>\r\nSubject: no body\r\n';
 
+/**
+ * 真实录音（Dovecot 风格）：a1 LOGIN → a2 ID（RFC 2971，网易系必须）→ a3 SELECT
+ * → a4 SEARCH → a5 FETCH → a6 LOGOUT。ID 的回复里额外带一句未标记数据。
+ */
 const IMAP_ROUTES = [
   { test: /^a1 LOGIN /, reply: 'a1 OK LOGIN completed\r\n' },
-  { test: /^a2 SELECT /, reply: '* 2 EXISTS\r\na2 OK [READ-ONLY] SELECT completed\r\n' },
-  { test: /^a3 SEARCH /, reply: '* SEARCH 1 2\r\na3 OK SEARCH completed\r\n' },
-  { test: /^a4 FETCH /, reply: FETCH_RESPONSE },
-  { test: /^a5 LOGOUT/, reply: '* BYE Logging out\r\na5 OK LOGOUT completed\r\n' },
+  { test: /^a2 ID /, reply: '* ID ("name" "Dovecot")\r\na2 OK ID completed\r\n' },
+  { test: /^a3 SELECT /, reply: '* 2 EXISTS\r\na3 OK [READ-ONLY] SELECT completed\r\n' },
+  { test: /^a4 SEARCH /, reply: '* SEARCH 1 2\r\na4 OK SEARCH completed\r\n' },
+  { test: /^a5 FETCH /, reply: FETCH_RESPONSE },
+  { test: /^a6 LOGOUT/, reply: '* BYE Logging out\r\na6 OK LOGOUT completed\r\n' },
 ];
 
 /** 问候语由服务端主动推送，不依赖客户端写入。 */
@@ -648,15 +653,21 @@ async function imapTests() {
 
   const socket = sockets[0];
   const writes = socket.writes.map((line) => line.trim());
-  // Python 的 imaplib 在 greeting 之后还会发一条 CAPABILITY，本实现不发（少一次往返）。
-  equal(writes.length, 5, '一共发出 5 条命令（LOGIN/SELECT/SEARCH/FETCH/LOGOUT）', writes);
+  // 与 Python 的 imaplib 不同：本实现不发 CAPABILITY，但按 RFC 2971 发一条 ID
+  // （网易系 163/126/yeah.net 不发就会被 SELECT 拒掉：Unsafe Login）。
+  equal(writes.length, 6, '一共发出 6 条命令（LOGIN/ID/SELECT/SEARCH/FETCH/LOGOUT）', writes);
   check('LOGIN 的引号与反斜杠都做了转义', /^a1 LOGIN "stu\\"dent\\\\x" "p@ss\\\\word\\"1"$/.test(writes[0]), writes[0]);
-  equal(writes[1], 'a2 SELECT "INBOX"', 'SELECT 用引用字符串');
-  const searchDate = /^a3 SEARCH SINCE "(\d{2}-[A-Za-z]{3}-\d{4})"$/.exec(writes[2]);
+  check(
+    'ID 命令按 RFC 2971 通报客户端身份（名称/版本/厂商/支持地址）',
+    /^a2 ID \("name" "dsh-canvas-task-monitor" "version" "\d+\.\d+\.\d+" "vendor" "jacky720real" "support-url" "https?:\/\/\S+"\)$/.test(writes[1]),
+    writes[1],
+  );
+  equal(writes[2], 'a3 SELECT "INBOX"', 'SELECT 用引用字符串');
+  const searchDate = /^a4 SEARCH SINCE "(\d{2}-[A-Za-z]{3}-\d{4})"$/.exec(writes[3]);
   equal(searchDate && searchDate[1], '31-Dec-2025', 'SEARCH SINCE 日期 = now − 7 天（UTC，dd-Mon-yyyy）');
-  check('FETCH 按块提交序号集合', writes[3].startsWith('a4 FETCH 1,2 '), writes[3]);
-  check('FETCH 用 BODY.PEEK[]（不改变已读状态）', writes[3].includes('BODY.PEEK[]'), writes[3]);
-  equal(writes[4], 'a5 LOGOUT', 'finally 里发 LOGOUT');
+  check('FETCH 按块提交序号集合', writes[4].startsWith('a5 FETCH 1,2 '), writes[4]);
+  check('FETCH 用 BODY.PEEK[]（不改变已读状态）', writes[4].includes('BODY.PEEK[]'), writes[4]);
+  equal(writes[5], 'a6 LOGOUT', 'finally 里发 LOGOUT');
   equal(socket.setEncodingCalls[0], 'latin1', 'socket 以 latin1 读取，保证逐字节保真');
   equal(socket.options.servername, 'imap.school.example.edu', 'tls 选项带 servername');
   equal(socket.options.rejectUnauthorized, true, 'tls 校验证书');
@@ -686,14 +697,15 @@ async function imapTests() {
     IMAP_ROUTES[0],
     IMAP_ROUTES[1],
     IMAP_ROUTES[2],
+    IMAP_ROUTES[3],
     {
-      test: /^a4 FETCH /,
+      test: /^a5 FETCH /,
       reply: `* 1 FETCH (BODY[] {${Buffer.byteLength(BODYLESS_MESSAGE, 'latin1')}}\r\n`
         + BODYLESS_MESSAGE
         + ')\r\n'
-        + 'a4 OK FETCH completed\r\n',
+        + 'a5 OK FETCH completed\r\n',
     },
-    IMAP_ROUTES[4],
+    IMAP_ROUTES[5],
   ];
   const failResult = await fetchMail(IMAP_CONFIG, {
     connect: createSocketFactory([], failingRoutes, 11),
@@ -728,6 +740,63 @@ async function imapTests() {
     '抛出的错误带服务器原文',
     authError !== null && authError.message.includes('Invalid credentials') && authError.message.includes('NO'),
     authError && authError.message,
+  );
+
+  // RFC 2971：服务器不认识 ID 会回 BAD —— 必须当没发生，后续命令照常
+  const idRejectedRoutes = [
+    IMAP_ROUTES[0],
+    { test: /^a2 ID /, reply: 'a2 BAD Unknown command\r\n' },
+    IMAP_ROUTES[2],
+    IMAP_ROUTES[3],
+    IMAP_ROUTES[4],
+    IMAP_ROUTES[5],
+  ];
+  const idRejectedSockets = [];
+  const idRejected = await fetchMail(IMAP_CONFIG, {
+    connect: createSocketFactory(idRejectedSockets, idRejectedRoutes, 7),
+    now: clock.now,
+    logger: silentLogger(),
+    sleep: clock.sleep,
+  });
+  equal(idRejected.items.length, 2, 'ID 被回 BAD 时照常取回 2 封邮件（ID 是可选命令）');
+  equal(idRejected.warnings.length, 0, 'ID 被拒不算警告');
+  check(
+    'ID 被拒后仍走完 SELECT/SEARCH/FETCH/LOGOUT',
+    idRejectedSockets[0].writes.some((line) => line.includes('LOGOUT')),
+    idRejectedSockets[0].writes,
+  );
+  const idRejectedTest = await testMail(IMAP_CONFIG, {
+    connect: createSocketFactory([], idRejectedRoutes, 7),
+    now: clock.now,
+    logger: silentLogger(),
+    sleep: clock.sleep,
+  });
+  equal(idRejectedTest.ok, true, 'testMail 在 ID 被拒时仍报成功');
+
+  // 网易系（163/126/yeah.net）：登录后不发 ID，SELECT 会被拒成 Unsafe Login
+  const unsafeLoginRoutes = [
+    IMAP_ROUTES[0],
+    IMAP_ROUTES[1],
+    { test: /^a3 SELECT /, reply: 'a3 NO SELECT Unsafe Login. Please contact kefu@188.com for help\r\n' },
+  ];
+  let unsafeError = null;
+  try {
+    await fetchMail(IMAP_CONFIG, {
+      connect: createSocketFactory([], unsafeLoginRoutes, 9),
+      now: clock.now,
+      logger: silentLogger(),
+      sleep: clock.sleep,
+    });
+  } catch (error) {
+    unsafeError = error;
+  }
+  check('SELECT 回 Unsafe Login 时抛出', unsafeError !== null, unsafeError && unsafeError.message);
+  check(
+    'Unsafe Login 的错误带"开启 IMAP 服务 + 授权码"提示与服务器原文',
+    unsafeError !== null
+      && unsafeError.message.includes('Unsafe Login')
+      && unsafeError.message.includes('授权码'),
+    unsafeError && unsafeError.message,
   );
 
   // testMail：成功路径报告条数
@@ -775,11 +844,11 @@ function pureFunctionTests() {
   );
   equal(crlfParsed.tagged.status, 'OK', '第二封的完成行仍被正确识别');
 
-  // 整段 FETCH 响应里只许有一条完成行（a4），且两个字面量都完好
-  const combined = parseImapResponse(FETCH_RESPONSE, { tag: 'a4' });
+  // 整段 FETCH 响应里只许有一条完成行（a5），且两个字面量都完好
+  const combined = parseImapResponse(FETCH_RESPONSE, { tag: 'a5' });
   equal(combined.literals.length, 2, '一次 FETCH 返回两个字面量');
-  equal(combined.tagged.status, 'OK', 'FETCH 响应以唯一的 a4 OK 收尾');
-  equal(combined.tagged.tag, 'a4', '完成行的标记是 a4');
+  equal(combined.tagged.status, 'OK', 'FETCH 响应以唯一的 a5 OK 收尾');
+  equal(combined.tagged.tag, 'a5', '完成行的标记是 a5');
   equal(
     combined.lines.filter((line) => line.status !== undefined).length,
     1,

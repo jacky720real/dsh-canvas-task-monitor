@@ -33,7 +33,7 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
 - `lookbackDays`（默认 30 天）之外的旧条目跳过；**截止时间无法解析的条目一律保留**（宁可多给一条，也不静默丢）。
 
 ### 邮箱（默认关闭，可选）
-- **IMAP**：`993` SSL + 账号密码，读 `folders`（默认 `INBOX`）中 `lookbackDays` 内的邮件。
+- **IMAP**：`993` SSL + 账号密码，读 `folders`（默认 `INBOX`）中 `lookbackDays` 内的邮件。登录后会按 **RFC 2971 发一条 `ID`** 通报客户端身份——网易邮箱（163 / 126 / yeah.net）不发这条就会被 `SELECT` 拒掉（`NO SELECT Unsafe Login`），所以这是必需的；服务器不认 `ID` 回 `BAD` 时会被忽略，不影响其他邮箱。网易需要先在网页端开启 IMAP 服务，密码栏填 **16 位授权码**而不是登录密码。
 - **Microsoft Graph**：仅支持 **client credentials**（应用权限），需要 `tenantId` / `clientId` / `clientSecret` / `user`；**不支持**授权码或设备码登录。
 - 可选 `senderDomains` 白名单（留空表示全部收件）。
 - 邮件的标题、摘要、课程、截止时间**由 AI 从主题和正文前若干字符推断**——邮箱本身没有结构化的截止时间。所以要用邮箱来源，务必先配好 AI。
@@ -175,6 +175,7 @@ dsh-canvas-task-monitor/
 │  ├─ llm.js             # OpenAI 兼容 chat/completions（重试 / 清洗 / 禁 score）
 │  ├─ pipeline.js        # 一轮拉取：变更检测 → 评分 → 写库 → 写快照
 │  ├─ scoring.js         # 规则评分：截止时间提取 + 关键词重要度 + 排序
+│  ├─ version.js         # 版本号的唯一来源（面板 status 与 IMAP 的 ID 命令共用）
 │  └─ util.js            # 时间 / 哈希 / 字符串工具
 ├─ install/              # apply.bat|ps1、rollback.bat|ps1（幂等，可回滚）
 └─ test/                 # 七套自测夹具（见下）
@@ -190,7 +191,7 @@ node test\manifest-check.mjs    :: 发布清单：DSH 读包的方式（dsh.clie
 node test\host-check.mjs       :: 宿主半区：配置 / 存储不变量 / 评分 / AI 清洗 / 路由 / 同源围栏
 node test\canvas-check.mjs     :: Canvas 连接器：分页 / 限流 / 重试 / 回看窗口
 node test\client-check.mjs     :: 浏览器半区：渲染与交互（react 由夹具桩接）
-node test\mail-check.mjs       :: 邮箱连接器：IMAP / Graph / MIME
+node test\mail-check.mjs       :: 邮箱连接器：IMAP（含 RFC 2971 ID）/ Graph / MIME
 node test\sources-check.mjs    :: 来源工厂与纯函数
 node test\cordis-check.mjs     :: 真 cordis 集成：注入 / 挂路由 / 同源围栏 / 拆解（找不到 DSH 自带的 cordis 就跳过）
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps1
@@ -209,7 +210,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 - **邮箱来源依赖 AI**：没有确定性的截止时间解析；同一个邮箱换 `provider`（imap ↔ graph）会重新建一遍任务，因为 `external_id` 前缀不同。
 - **Graph 只支持应用权限**（client credentials），不支持用户登录授权。
-- **IMAP 是明文 `LOGIN` + 993 SSL**，没有 XOAUTH2。
+- **IMAP 是明文 `LOGIN` + 993 SSL**，没有 XOAUTH2（登录后按 RFC 2971 发一条 `ID`，网易系必需）。
 - **不会自动清理消失的条目**：Canvas 上被删掉的作业/公告不会从列表里消失，也不会被自动标记完成（需要你自己勾选）。
 - **公告按课程逐门请求**：`N` 门课会产生 `2N+1` 条请求链，课程多时首轮会慢一些。
 - **不剥 HTML**：公告正文原样保存（只在给 AI 之前做最小清理）。

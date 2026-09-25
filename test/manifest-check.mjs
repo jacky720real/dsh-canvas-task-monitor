@@ -44,6 +44,13 @@ const pkg = JSON.parse(read('package.json'));
 check('包名是 dsh-canvas-task-monitor', pkg.name === 'dsh-canvas-task-monitor', pkg.name);
 check('type 是 module', pkg.type === 'module');
 check('版本是合法 semver', /^\d+\.\d+\.\d+/.test(String(pkg.version)), pkg.version);
+// 版本的唯一来源是 lib/version.js（index.js 回给面板、mail.js 写进 RFC 2971 的 ID 命令），
+// package.json 只能跟着它走；两边不一致意味着面板显示与实际行为会对不上。
+const versionModule = /export\s+const\s+VERSION\s*=\s*'([^']+)'/.exec(read('lib/version.js'));
+check('lib/version.js 导出 VERSION', versionModule !== null, versionModule && versionModule[1]);
+check('package.json 的 version 与 lib/version.js 一致', versionModule !== null && versionModule[1] === pkg.version, `${pkg.version} vs ${versionModule && versionModule[1]}`);
+check('lib/index.js 从 lib/version.js 取版本（不再各写一份）', read('lib/index.js').includes("from './version.js'"));
+check('lib/mail.js 从 lib/version.js 取版本（ID 命令里不许再写死）', read('lib/mail.js').includes("from './version.js'"));
 check('engines.node 至少 22.5', /(\d+)/.test(String(pkg.engines?.node ?? '')) && Number(/(\d+)/.exec(String(pkg.engines.node))[1]) >= 22, String(pkg.engines?.node));
 check('dsh.engines.dsh 已声明', typeof pkg.dsh?.engines?.dsh === 'string' && pkg.dsh.engines.dsh.length > 0, String(pkg.dsh?.engines?.dsh));
 check('声明了 dsh.bundle.patch', pkg.dsh?.bundle?.patch === './cordis.patch.yml', String(pkg.dsh?.bundle?.patch));
