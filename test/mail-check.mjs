@@ -773,6 +773,43 @@ async function imapTests() {
   });
   equal(idRejectedTest.ok, true, 'testMail 在 ID 被拒时仍报成功');
 
+  // 宿主点「测试连接」时走的是 pipeline.testSource → testMail(config)，**不传任何 options**：
+  // 少传 logger 曾经让一句调试日志（`logger.debug`）把整次连接打崩。夹具必须照抄这个入口。
+  const noLoggerTest = await testMail(IMAP_CONFIG, { connect: createSocketFactory([], IMAP_ROUTES, 7), now: clock.now });
+  equal(noLoggerTest.ok, true, '不传 logger（宿主 test_source 的真实调用方式）也能连上');
+  check('不传 logger 时报出邮件条数', noLoggerTest.message.includes('2 封'), noLoggerTest.message);
+
+  const noLoggerFetch = await fetchMail(IMAP_CONFIG, { connect: createSocketFactory([], IMAP_ROUTES, 7), now: clock.now, sleep: clock.sleep });
+  equal(noLoggerFetch.items.length, 2, '不传 logger 时照常取回 2 封邮件');
+  equal(noLoggerFetch.warnings.length, 0, '不传 logger 不产生警告');
+
+  for (const [label, logger] of [['null', null], ['undefined', undefined], ['字符串', 'not-a-logger']]) {
+    const odd = await testMail(IMAP_CONFIG, { connect: createSocketFactory([], IMAP_ROUTES, 7), now: clock.now, logger });
+    equal(odd.ok, true, `logger=${label} 时降级成静默而不是崩掉`);
+  }
+
+  const debugLines = [];
+  const collectingLogger = { debug: (...args) => debugLines.push(args.join(' ')), info: () => {}, warn: () => {}, error: () => {} };
+  await testMail(IMAP_CONFIG, { connect: createSocketFactory([], IMAP_ROUTES, 7), now: clock.now, logger: collectingLogger });
+  check(
+    '给了 logger 时日志照样发出去（不是把日志整体静音换来的不崩）',
+    debugLines.some((line) => line.includes('IMAP → a1 LOGIN')),
+    debugLines.join(' | '),
+  );
+
+  // 有些宿主把 logger 做成「带 .debug 的函数」——不能被当成非对象静音掉
+  const functionDebugLines = [];
+  const functionLogger = Object.assign(() => {}, {
+    debug: (...args) => functionDebugLines.push(args.join(' ')),
+  });
+  const functionLoggerTest = await testMail(IMAP_CONFIG, { connect: createSocketFactory([], IMAP_ROUTES, 7), now: clock.now, logger: functionLogger });
+  equal(functionLoggerTest.ok, true, '函数型 logger 也能连上');
+  check(
+    '函数型 logger 的 .debug 仍被调用',
+    functionDebugLines.some((line) => line.includes('IMAP → a1 LOGIN')),
+    functionDebugLines.join(' | '),
+  );
+
   // 网易系（163/126/yeah.net）：登录后不发 ID，SELECT 会被拒成 Unsafe Login
   const unsafeLoginRoutes = [
     IMAP_ROUTES[0],

@@ -204,6 +204,8 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 `test\client-check.mjs` 的假宿主**照抄真宿主的载荷形状**（`get_config` 回的是 `{ config, dataDir, configPath, configExists, problems }` 这个包装对象），`test\host-check.mjs` 那边还有一条断言把包装对象的键钉死。两边都钉住是有原因的：设置页曾经把包装对象当成配置本身，于是所有字段（学校地址、邮箱账号、模型名…）都渲染成空，看着就像"配置丢了"——而假夹具当时回的是裸配置，所以夹具全绿、真机全空。改夹具之前先改契约，别让夹具比真宿主更宽松。
 
+`test\mail-check.mjs` 里同一个教训的第二次现身：夹具过去总是自己传一个 `logger`，而宿主点「测试连接」走的是 `testSource(config, source)` → `testMail(config)`，**根本不传 options**，少传的 `logger` 让一句调试日志把整次 IMAP 连接打崩成 `Cannot read properties of undefined (reading 'debug')`。现在既有"不传 logger 也能连上"、也有"`logger=null` / 字符串降级成静默"、"函数型 logger 的 `.debug` 仍被调用"这几条，保证不是靠整体静音换来的不崩。
+
 `test\selftest.ps1` 还额外覆盖三件真机上踩过的事：包装完之后 pnpm **不会**替你删掉 `node_modules\<包名>` 里指向旧目录的符号链接（rollback 自己摘）、`node_modules` 里的条目**必须**解析到本包（指向别的包时 apply 拒绝而不是静默放行）、以及 `"dependencies": {}` 这种全新 profile 的空属性表不会把脚本打崩（`Set-StrictMode -Version Latest` 下的成员枚举会抛 `PropertyNotFoundStrict`）。
 
 安装机器夹具是**可移植**的：仓库根由脚本自身位置推出，临时目录取系统 `TEMP`，找不到真实 profile（`$env:DSH_HOME`，否则 `~\.dsh`）时就**合成**一份最小 profile（`dependencies` 为空、`cordis.patch.yml` 带一条 `modlens`），所以在没装 DSH 的机器上跑同一份脚本结果一致（129 项）。其中 T20 专门盯**别人的机器**：不传 `-ProfileDir`，只给一个 `DSH_HOME`，验证默认解析到 `profiles\desktop`（没有就退化为唯一的那个 profile），并且不留下任何快照；T21 则走**真实入口** `apply.bat` / `rollback.bat`（不传 `-PluginDir`），因为 Windows PowerShell 在**参数默认值**求值时还没有自动变量（`$PSScriptRoot` 此刻为空）——这个坑只有从 `.bat` 进来才会踩到，直接调 `.ps1` 且显式传 `-PluginDir` 的所有用例都发现不了。
