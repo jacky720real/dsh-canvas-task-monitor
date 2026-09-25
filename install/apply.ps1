@@ -48,13 +48,34 @@ param(
         }
     ),
     # The repository root is the plugin package itself: this script lives in
-    # <repo>\install, so the parent of $PSScriptRoot is right on any machine.
-    # The self-test overrides it with a throwaway copy so it can link that.
-    [string]$PluginDir = $(Split-Path -Parent $PSScriptRoot)
+    # <repo>\install, so the parent of the script's own folder is right on any
+    # machine. It is resolved in the script body below, NOT here: automatic
+    # variables such as $PSScriptRoot are still empty while parameter defaults
+    # are evaluated, and Windows PowerShell then dies with "Cannot bind argument
+    # to parameter 'Path' because it is an empty string". The self-test overrides
+    # it with a throwaway copy so it can link that.
+    [string]$PluginDir = ''
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# ------------------------------------------------------ where are we? --------
+# <repo>\install\apply.ps1 -> <repo>. $PSScriptRoot is populated once the script
+# body runs; the fallbacks cover dot-sourcing, where it can be empty.
+if ([string]::IsNullOrWhiteSpace($PluginDir)) {
+    $selfDir = $PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($selfDir) -and -not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        $selfDir = Split-Path -Parent $PSCommandPath
+    }
+    if ([string]::IsNullOrWhiteSpace($selfDir) -and -not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) {
+        $selfDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    if ([string]::IsNullOrWhiteSpace($selfDir)) {
+        throw 'apply.ps1: cannot tell where this script lives -- pass -PluginDir <the repository folder that contains package.json>'
+    }
+    $PluginDir = Split-Path -Parent $selfDir
+}
 
 $DepName       = 'dsh-canvas-task-monitor'
 # Derived from $PluginDir so an overridden -PluginDir is also the directory the

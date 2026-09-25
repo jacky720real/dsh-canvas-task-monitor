@@ -64,6 +64,25 @@ function Invoke-Step([string]$Script, [string[]]$Arguments) {
     return [pscustomobject]@{ Code = $code; Text = $text }
 }
 
+function Invoke-Bat([string]$Bat, [string[]]$Arguments) {
+    # Exercises the wrapper a human actually runs. The wrappers add nothing but
+    # the interpreter choice, so they must be tested as-is: they call the .ps1 with
+    # -File and hand over no -PluginDir.
+    $saved = $ErrorActionPreference
+    $text = ''
+    $code = -1
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & cmd.exe /c $Bat @Arguments 2>&1
+        $code = $LASTEXITCODE
+        $text = ($output | Out-String)
+    }
+    finally {
+        $ErrorActionPreference = $saved
+    }
+    return [pscustomobject]@{ Code = $code; Text = $text }
+}
+
 function Get-Hashes([string]$Directory) {
     $map = @{}
     foreach ($name in $ProfileFiles) {
@@ -286,7 +305,15 @@ Check 'T0 rollback.ps1 keeps no reference to the old Python project' `
 Check 'T0 apply.ps1 is ASCII-only' (-not ($applyText -match '[^\x00-\x7F]'))
 Check 'T0 rollback.ps1 is ASCII-only' (-not ($rollbackText -match '[^\x00-\x7F]'))
 Check 'T0 apply.ps1 derives -PluginDir from its own location' `
-    ($applyText -match [regex]::Escape('$(Split-Path -Parent $PSScriptRoot)'))
+    (($applyText -match [regex]::Escape('$PluginDir = Split-Path -Parent $selfDir')) -and
+     ($applyText -match [regex]::Escape("[string]`$PluginDir = ''")))
+# Windows PowerShell evaluates parameter defaults before the automatic variables
+# exist, so the default may not be an expression over $PSScriptRoot. Comments in
+# the block are allowed to mention it; code is not.
+$pluginParamBlock = [regex]::Match($applyText, '(?s)param\((.*?)\r?\n\)').Groups[1].Value
+$pluginParamCode = (@($pluginParamBlock -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
+Check 'T0 apply.ps1 does not use $PSScriptRoot as a parameter default' `
+    (-not ($pluginParamCode -match '\$PSScriptRoot')) ("code=" + $pluginParamCode)
 Check 'T0 the default profile resolves from DSH_HOME in apply.ps1' `
     ($applyText -match [regex]::Escape('$env:DSH_HOME'))
 Check 'T0 the default profile resolves from DSH_HOME in rollback.ps1' `
@@ -600,6 +627,34 @@ foreach ($case in @(
     Check ("T20 no snapshot was written: " + $case.Name) (-not (Test-Path -LiteralPath (Join-Path $prof '.dsh-ctm-snapshot')))
 }
 if ($null -eq $savedDshHome) { Remove-Item Env:DSH_HOME -ErrorAction SilentlyContinue } else { $env:DSH_HOME = $savedDshHome }
+
+# -------------------------------------------------------------------- T21 ---
+# The .bat wrapper is the entry point a user actually runs, and it calls apply.ps1
+# through -File with NO -PluginDir. Every case above drives the .ps1 directly and
+# passes -PluginDir, so a default that cannot be evaluated during parameter
+# binding slipped through and only blew up on a real machine:
+#   Split-Path : Cannot bind argument to parameter 'Path' because it is an empty
+#   string.  ... apply.ps1:53  [string]$PluginDir = $(Split-Path -Parent $PSScriptRoot)
+# Automatic variables are not populated yet at that point. Test the wrapper.
+$env:APPDATA = Join-Path $Root 'appdata'
+$env:PATH = $SanitizedPath
+$batProfile = Join-Path $Root 'bat-profile'
+if (Test-Path -LiteralPath $batProfile) { Remove-Item -LiteralPath $batProfile -Recurse -Force }
+New-Item -ItemType Directory -Path $batProfile -Force | Out-Null
+foreach ($name in $ProfileFiles) { Copy-Item -LiteralPath (Join-Path $OriginalDir $name) -Destination (Join-Path $batProfile $name) -Force }
+$repoSpec = 'link:' + $RepoRoot.Replace('\', '/')
+$t21 = Invoke-Bat (Join-Path $RepoRoot 'install\apply.bat') @('-DryRun', '-ProfileDir', $batProfile)
+Check 'T21 apply.bat runs with no -PluginDir' ($t21.Code -eq 0) ("code=" + $t21.Code + " :: " + $t21.Text)
+Check 'T21 apply.bat derives the package from its own folder' ($t21.Text -match [regex]::Escape($repoSpec)) ("text=" + $t21.Text)
+Check 'T21 apply.bat hits no PowerShell binding error' `
+    (-not ($t21.Text -match 'empty string|ParameterArgumentValidationError|PropertyNotFoundStrict')) ("text=" + $t21.Text)
+Check 'T21 apply.bat dry run made no snapshot' (-not (Test-Path -LiteralPath (Join-Path $batProfile '.dsh-ctm-snapshot')))
+$fixtureSpec = 'link:' + $PluginFixture.Replace('\', '/')
+$t21b = Invoke-Bat (Join-Path $RepoRoot 'install\apply.bat') @('-DryRun', '-ProfileDir', $batProfile, '-PluginDir', $PluginFixture)
+Check 'T21 apply.bat forwards explicit arguments' `
+    ($t21b.Code -eq 0 -and $t21b.Text -match [regex]::Escape($fixtureSpec)) ("code=" + $t21b.Code + " :: " + $t21b.Text)
+$t21c = Invoke-Bat (Join-Path $RepoRoot 'install\rollback.bat') @('-ProfileDir', $batProfile)
+Check 'T21 rollback.bat runs with no defaults supplied' ($t21c.Code -eq 0) ("code=" + $t21c.Code + " :: " + $t21c.Text)
 
 $env:APPDATA = Join-Path $Root 'appdata'
 $env:PATH = $SanitizedPath

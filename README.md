@@ -59,7 +59,8 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
 在**外部终端**（不是 DSH 内的终端）执行：
 
 ```bat
-cd <你克隆下来的仓库>\install
+git clone https://github.com/Jacky720real/dsh-canvas-task-monitor.git
+cd dsh-canvas-task-monitor\install
 rollback.bat          :: 仅当该 profile 里还留着上一版插件的快照时才需要
 apply.bat -DryRun     :: 只打印计划，不写任何文件
 apply.bat             :: 真正安装
@@ -200,7 +201,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 `test\selftest.ps1` 还额外覆盖三件真机上踩过的事：包装完之后 pnpm **不会**替你删掉 `node_modules\<包名>` 里指向旧目录的符号链接（rollback 自己摘）、`node_modules` 里的条目**必须**解析到本包（指向别的包时 apply 拒绝而不是静默放行）、以及 `"dependencies": {}` 这种全新 profile 的空属性表不会把脚本打崩（`Set-StrictMode -Version Latest` 下的成员枚举会抛 `PropertyNotFoundStrict`）。
 
-安装机器夹具是**可移植**的：仓库根由 `$PSScriptRoot` 推出，临时目录取系统 `TEMP`，找不到真实 profile（`$env:DSH_HOME`，否则 `~\.dsh`）时就**合成**一份最小 profile（`dependencies` 为空、`cordis.patch.yml` 带一条 `modlens`），所以在没装 DSH 的机器上跑同一份脚本结果一致（122 项）。其中 T20 专门盯**别人的机器**：不传 `-ProfileDir`，只给一个 `DSH_HOME`，验证默认解析到 `profiles\desktop`（没有就退化为唯一的那个 profile），并且不留下任何快照。
+安装机器夹具是**可移植**的：仓库根由脚本自身位置推出，临时目录取系统 `TEMP`，找不到真实 profile（`$env:DSH_HOME`，否则 `~\.dsh`）时就**合成**一份最小 profile（`dependencies` 为空、`cordis.patch.yml` 带一条 `modlens`），所以在没装 DSH 的机器上跑同一份脚本结果一致（129 项）。其中 T20 专门盯**别人的机器**：不传 `-ProfileDir`，只给一个 `DSH_HOME`，验证默认解析到 `profiles\desktop`（没有就退化为唯一的那个 profile），并且不留下任何快照；T21 则走**真实入口** `apply.bat` / `rollback.bat`（不传 `-PluginDir`），因为 Windows PowerShell 在**参数默认值**求值时还没有自动变量（`$PSScriptRoot` 此刻为空）——这个坑只有从 `.bat` 进来才会踩到，直接调 `.ps1` 且显式传 `-PluginDir` 的所有用例都发现不了。
 
 `cordis-check.mjs` 是唯一会用真实依赖的夹具：它加载 DSH 自带的 `@deepseek-ai/cordis`，起一个真插件宿主并把宿主半区装进去，然后用真 `http.Server` 打一遍同源围栏与 action 白名单。cordis 的查找顺序是：环境变量 `CTM_CORDIS`（指向它的 `lib/index.js`）→ `<DSH_HOME>\profiles\node_modules\@deepseek-ai\cordis\lib\index.js` → 常见的 `DSH Desktop\resources\app\node_modules\...`；都没有就打印 `SKIP` 并以 0 退出。
 
