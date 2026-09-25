@@ -2,17 +2,20 @@
 // FAKE_PROFILE points at a throwaway copy, which this script edits and into
 // whose node_modules the plugin package is linked.
 //
-// FAKE_PLUGIN_DIR is the package the harness wants linked; the default is the
-// published plugin location (the repository root of dsh-canvas-task-monitor).
+// FAKE_PLUGIN_DIR is the package the harness wants linked; by default it is
+// derived from this file's location (the repository root), so no machine
+// path is baked into the fixture.
 import { readFileSync, writeFileSync, mkdirSync, rmSync, symlinkSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const profile = process.env.FAKE_PROFILE;
 if (!profile) {
   console.error("fake pnpm: FAKE_PROFILE is not set");
   process.exit(2);
 }
-const pluginDir = process.env.FAKE_PLUGIN_DIR || "D:\\dev\\mcp\\dsh-canvas-task-monitor";
+const pluginDir = process.env.FAKE_PLUGIN_DIR
+  || resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const depName = "dsh-canvas-task-monitor";
 const pkgPath = join(profile, "package.json");
 // apply.ps1 prefixes the Desktop policy argument (--config.minimumReleaseAge=0)
