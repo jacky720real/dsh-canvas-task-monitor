@@ -152,8 +152,8 @@ function Find-DshCommand {
     # .Count property at all.
     $onPath = @(Get-Command -Name 'dsh' -CommandType Application -ErrorAction SilentlyContinue)
     if ($onPath.Count -gt 0) { return $onPath[0] }
-    $root = Join-Path $env:APPDATA 'DSH Desktop\host-commands'
-    if (Test-Path -LiteralPath $root) {
+    $root = if ($env:APPDATA) { Join-Path $env:APPDATA 'DSH Desktop\host-commands' } else { '' }
+    if ($root -and (Test-Path -LiteralPath $root)) {
         $hits = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter 'dsh.cmd' -ErrorAction SilentlyContinue |
             Sort-Object -Property FullName)
         if ($hits.Count -gt 0) { return $hits[0] }
@@ -186,11 +186,14 @@ function Find-PnpmCommand {
         $found = @(Get-Command -Name $name -CommandType Application -ErrorAction SilentlyContinue)
         if ($found.Count -gt 0) { return $found[0] }
     }
+    # $(if ...) keeps Join-Path from ever seeing a $null base: a stripped-down
+    # environment (CI container, Git Bash) may lack ProgramFiles et al., and the
+    # $candidate -and guard below can only skip entries the array already holds.
     $candidates = @(
-        (Join-Path $env:APPDATA 'npm\pnpm.cmd'),
-        (Join-Path $env:LOCALAPPDATA 'pnpm\pnpm.exe'),
-        (Join-Path $env:LOCALAPPDATA 'hermes\bin\pnpm.cmd'),
-        (Join-Path $env:ProgramFiles 'nodejs\pnpm.cmd')
+        $(if ($env:APPDATA)     { Join-Path $env:APPDATA 'npm\pnpm.cmd' }),
+        $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'pnpm\pnpm.exe' }),
+        $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'hermes\bin\pnpm.cmd' }),
+        $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'nodejs\pnpm.cmd' })
     )
     foreach ($candidate in $candidates) {
         if ($candidate -and (Test-Path -LiteralPath $candidate)) {
@@ -203,8 +206,8 @@ function Find-PnpmCommand {
 function Find-DshRuntimePnpm {
     # DSH Desktop's own pnpm shim, the only place that owns the Desktop-wide
     # policy argument. See the matching comment in apply.ps1.
-    $root = Join-Path $env:APPDATA 'DSH Desktop\runtime-commands\generations'
-    if (-not (Test-Path -LiteralPath $root)) { return $null }
+    $root = if ($env:APPDATA) { Join-Path $env:APPDATA 'DSH Desktop\runtime-commands\generations' } else { '' }
+    if (-not $root -or -not (Test-Path -LiteralPath $root)) { return $null }
     $hits = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter 'pnpm.cmd' -ErrorAction SilentlyContinue |
         Sort-Object -Property LastWriteTime -Descending)
     if ($hits.Count -gt 0) { return $hits[0] }
