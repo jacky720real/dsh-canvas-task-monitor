@@ -388,6 +388,24 @@ const badgeTree = renderInst({ component: badge, props: { wide: true }, hooks: [
 check('角标窄栏时含“任务”', flatten(badgeTree).includes('任务'));
 check('角标自带图标', all(badgeTree, (node) => String(node.props.className ?? '') === 'ctm-badge-glyph').length === 1);
 
+// 角标外观：与左下角「更多」行对齐 / 红点不带数字 / 跟随 wallpaper 的全局玻璃主题
+const badgeCss = String(styles[0]?.textContent ?? '');
+const badgeRule = (selector) => {
+  const at = badgeCss.indexOf(selector);
+  return at < 0 ? '' : badgeCss.slice(at, badgeCss.indexOf('}', at) + 1);
+};
+const badgeBase = badgeRule('.ctm-badge {');
+check('角标行尺寸与左下角「更多」行一致', /height:44px/.test(badgeBase) && /padding:6px/.test(badgeBase) && /gap:8px/.test(badgeBase), badgeBase);
+check('角标 hover 用 shell 同款令牌', /--dsw-alias-interactive-bg-hover/.test(badgeRule('.ctm-badge:hover')), badgeRule('.ctm-badge:hover'));
+check('角标图标槽 24px（与「更多」头像同宽，文字左缘才对齐）', /width:24px/.test(badgeRule('.ctm-badge-glyph')), badgeRule('.ctm-badge-glyph'));
+check('角标折叠态 36×36', /width:36px/.test(badgeRule('.ctm-badge[data-collapsed="true"]')) && /height:36px/.test(badgeRule('.ctm-badge[data-collapsed="true"]')), badgeRule('.ctm-badge[data-collapsed="true"]'));
+check('红点是纯色圆点', /border-radius:50%/.test(badgeRule('.ctm-badge-dot {')) && /background:var\(--dsw-alias-label-tertiary/.test(badgeRule('.ctm-badge-dot {')), badgeRule('.ctm-badge-dot {'));
+check('红点错误态用主题错误色', /background:var\(--dsw-alias-state-error-primary/.test(badgeRule('.ctm-badge-dot[data-tone="hot"]')), badgeRule('.ctm-badge-dot[data-tone="hot"]'));
+check('旧的数字药丸样式已删除', !badgeCss.includes('ctm-badge-count'), '样式表里仍有 ctm-badge-count');
+check('角标识别 wallpaper 的全局玻璃主题', /body\[data-we-sidebar-glass\]\s*\.ctm-badge\s*\{/.test(badgeCss) && /backdrop-filter:blur\(var\(--we-sidebar-blur/.test(badgeCss) && /--we-sidebar-tint/.test(badgeCss) && /--we-sidebar-sheen/.test(badgeCss));
+check('壁纸玻璃下的角标底色走 --we-sidebar-color/tint', /color-mix\(in srgb, var\(--we-sidebar-color,#ffffff\) calc\(var\(--we-sidebar-tint,20%\) \* 0\.75\)/.test(badgeCss), '没找到浅色玻璃底色');
+check('深色主题下玻璃系数按壁纸插件的 0.5', /body\[data-ds-dark-theme\]\[data-we-sidebar-glass\]\s*\.ctm-badge\s*\{[^}]*--we-sidebar-tint,20%\)\s*\*\s*0\.5\)/.test(badgeCss), '没找到深色玻璃底色');
+
 /* ------------------------------------------------- 排序函数（纯函数断言） */
 
 const sortInput = [
@@ -626,6 +644,10 @@ check('返回后回到任务列表', byClass('ctm-card').length === 3 && byRole(
 // 角标读到同一份 store
 const badgeAfter = renderInst({ component: badge, props: { wide: true }, hooks: [], hookIndex: 0 });
 check('角标显示待办数', flatten(badgeAfter).includes('待办 3'), flatten(badgeAfter));
+const badgeDots = all(badgeAfter, (node) => String(node.props.className ?? '') === 'ctm-badge-dot');
+check('角标红点只有一个且不带数字', badgeDots.length === 1 && flatten(badgeDots[0]) === '', `${badgeDots.length} 个红点，文本="${badgeDots.map((n) => flatten(n)).join('|')}"`);
+check('角标红点是纯色（有未完成 → hot）', badgeDots[0]?.props['data-tone'] === 'hot', String(badgeDots[0]?.props['data-tone']));
+check('角标里不再出现重复的数字药丸', all(badgeAfter, (node) => String(node.props.className ?? '') === 'ctm-badge-count').length === 0);
 
 /* --------------------------- 活动时间不是截止时间 + 自动完成的“完成方式” */
 
