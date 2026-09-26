@@ -133,15 +133,24 @@ function Get-PropertyNames($Object) {
     return $names
 }
 
+function Normalize-LinkTarget([string]$Raw) {
+    # Windows PowerShell 5.1 reports a junction's target straight out of the
+    # object-manager namespace ("Global\C:\path", or "\??\C:\path"), and
+    # Path.GetFullPath() rejects that form with "The given path's format is not
+    # supported." -- so strip the prefix before handing it to the filesystem APIs.
+    if ($Raw -match '^(?:Global|Local|\\\?\?)\\(.+)$') { return $Matches[1] }
+    return $Raw
+}
+
 function Get-LinkTarget([string]$Path) {
     # Resolved target of a reparse point (directory symlink or junction), or ''
     # when the path is a real directory (a hoisted copy) or unreadable.
     $item = Get-Item -LiteralPath $Path -Force
     if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) { return '' }
-    $raw = @($item.Target)[0]
+    $raw = Normalize-LinkTarget (@($item.Target)[0])
     if ([string]::IsNullOrEmpty($raw)) { return '' }
     if (-not [System.IO.Path]::IsPathRooted($raw)) { $raw = Join-Path (Split-Path -Parent $Path) $raw }
-    return [System.IO.Path]::GetFullPath($raw).TrimEnd('\')
+    try { return [System.IO.Path]::GetFullPath($raw).TrimEnd('\') } catch { return '' }
 }
 
 function Test-LinkedIdentity([string]$LinkDir, [string]$ExpectedDir) {
@@ -513,10 +522,10 @@ function Get-LinkTarget([string]$Path) {
     # real directory (a hoisted copy) or the target cannot be read.
     $item = Get-Item -LiteralPath $Path -Force
     if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) { return '' }
-    $raw = @($item.Target)[0]
+    $raw = Normalize-LinkTarget (@($item.Target)[0])
     if ([string]::IsNullOrEmpty($raw)) { return '' }
     if (-not [System.IO.Path]::IsPathRooted($raw)) { $raw = Join-Path (Split-Path -Parent $Path) $raw }
-    return [System.IO.Path]::GetFullPath($raw).TrimEnd('\')
+    try { return [System.IO.Path]::GetFullPath($raw).TrimEnd('\') } catch { return '' }
 }
 
 # The entry has to be THIS package. A previous installation of the same name

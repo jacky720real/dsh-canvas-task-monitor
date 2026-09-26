@@ -374,22 +374,19 @@ else console.log('WARN  没找到真实 React，跳过 API 存在性校验');
 const ctx = { slots, get: () => undefined, logger: { debug() {}, info() {}, warn() {}, error() {} } };
 loaded.exports.apply(ctx);
 
-check('注册了 3 个槽位', registered.size === 3, [...registered.keys()].join(' | '));
-check('注册了侧边栏导航行', registered.has('sidebar.panellist:canvas-task-monitor'));
+check('注册了 2 个槽位', registered.size === 2, [...registered.keys()].join(' | '));
+check('不注册侧边栏导航行（第三方侧边栏自带「任务」栏时会重名）', !registered.has('sidebar.panellist:canvas-task-monitor'), [...registered.keys()].join(' | '));
 check('注册了主区域整页面板', registered.has('main:canvas-task-monitor'));
 check('注册了左下角角标', registered.has('sidebar.footer.action:canvas-task-monitor-badge'));
-check('panel key 与 panellist id 一致', registered.get('main:canvas-task-monitor').options.key === registered.get('sidebar.panellist:canvas-task-monitor').options.id);
+check('角标 id 与 panel key 同源', registered.get('sidebar.footer.action:canvas-task-monitor-badge') !== undefined && registered.get('main:canvas-task-monitor').options.key === 'canvas-task-monitor', [...registered.keys()].join(' | '));
 check('样式只注入一次', styles.length === 1, `${styles.length} 个 style`);
 
-const icon = registered.get('sidebar.panellist:canvas-task-monitor').component;
 const badge = registered.get('sidebar.footer.action:canvas-task-monitor-badge').component;
 const panel = registered.get('main:canvas-task-monitor').component;
 
-const iconTree = renderInst({ component: icon, props: { size: 16, active: false }, hooks: [], hookIndex: 0 });
-check('侧边栏图标渲染出 svg', all(iconTree, (node) => node.type === 'svg').length === 1);
-
 const badgeTree = renderInst({ component: badge, props: { wide: true }, hooks: [], hookIndex: 0 });
 check('角标窄栏时含“任务”', flatten(badgeTree).includes('任务'));
+check('角标自带图标', all(badgeTree, (node) => String(node.props.className ?? '') === 'ctm-badge-glyph').length === 1);
 
 /* ------------------------------------------------- 排序函数（纯函数断言） */
 
@@ -696,6 +693,29 @@ check('活动行的元信息用“活动 …”前缀', eventBody.includes('活�
 
 byRole('show-done')[0].props.onChange({ target: { checked: true } });
 await settle();
+
+/* 来源小提示：一条邮箱来的、一条 Canvas 来的，各自要标清楚。
+   两条都要在屏上（Canvas 那条是已完成，所以要先打开「显示已完成」）。
+   className 是 "ctm-tag ctm-source"，byClass 是精确匹配，这里得自己筛。 */
+const sourceChips = els((node) => String(node.props.className ?? '').split(' ').includes('ctm-source'));
+check('卡片上渲染出来源小标签', sourceChips.length === 2, sourceChips.map((node) => flatten(node)).join(','));
+check(
+  '邮箱来源标“邮箱”、Canvas 来源标“Canvas”',
+  sourceChips.some((node) => flatten(node) === '邮箱' && node.props['data-source'] === 'mail') &&
+    sourceChips.some((node) => flatten(node) === 'Canvas' && node.props['data-source'] === 'canvas'),
+  sourceChips.map((node) => `${flatten(node)}:${node.props['data-source']}`).join(','),
+);
+check(
+  '来源标签带“来源：…”的悬浮提示',
+  sourceChips.every((node) => typeof node.props.title === 'string' && node.props.title.startsWith('来源：')),
+  sourceChips.map((node) => String(node.props.title)).join(','),
+);
+check(
+  '来源标签的两种色调用的是主题文字色',
+  /\.ctm-source\[data-source="mail"\]\s*\{[^}]*var\(--dsw-alias-label-primary/.test(styles[0]?.textContent ?? '') &&
+    /\.ctm-source\[data-source="canvas"\]\s*\{[^}]*var\(--dsw-alias-label-primary/.test(styles[0]?.textContent ?? ''),
+  'styles',
+);
 const doneCard = cardOf('Essay 2')[0];
 check('显示已完成后能看到自动勾掉的作业', doneCard !== undefined);
 doneCard.props.onClick();

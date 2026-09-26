@@ -106,8 +106,21 @@ function Read-ArgLog([string]$Path) {
     return @((Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json) | ForEach-Object { $_ })
 }
 
+function Remove-Tree([string]$Path) {
+    # Windows PowerShell 5.1's `Remove-Item -Recurse` walks INTO junctions/symlinks
+    # instead of unlinking them: it can die halfway and leave the reparse point (and
+    # the rest of the tree) behind, and the next run then fails on
+    # `New-Item -ItemType Junction` with "DirectoryNotEmpty". cmd's `rmdir /s /q`
+    # removes the link itself and never descends into the target.
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    cmd.exe /c rmdir /s /q "$Path" 2>&1 | Out-Null
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ------------------------------------------------------------------ setup ---
-if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force }
+Remove-Tree $Root
 New-Item -ItemType Directory -Path $ProfileDir -Force | Out-Null
 New-Item -ItemType Directory -Path $OriginalDir -Force | Out-Null
 foreach ($name in $ProfileFiles) {
@@ -662,6 +675,10 @@ $finalHashes3 = Get-Hashes -Directory $ProfileDir
 $identical3 = $true
 foreach ($name in $originalHashes.Keys) { if ($originalHashes[$name] -ne $finalHashes3[$name]) { $identical3 = $false } }
 Check 'T15/T16/T17/T18 profile is byte-identical to the original again' $identical3
+
+# Tear the sandbox down again: leaving the junction behind is what used to break the
+# next run (see Remove-Tree). Best effort -- never fail the run over cleanup.
+try { Remove-Tree $Root } catch { }
 
 # ---------------------------------------------------------------- summary ---
 Write-Host ''

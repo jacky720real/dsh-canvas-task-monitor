@@ -14,9 +14,13 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
 
 | 区域 | 说明 |
 | --- | --- |
-| 侧边栏导航行 | 左侧栏新增一行「任务」，带未完成数量角标 |
+| 左下角快捷角标 | 常驻小按钮（面板的**唯一入口**），带未完成数量，点一下切到整页面板 |
 | 主区域整页 | 完整任务清单：筛选条（全部 / 作业 / 活动 / 提醒）、「显示已完成」开关、手动「拉取」、统计、设置页 |
-| 左下角快捷角标 | 常驻小按钮，点开即看最近任务，不必切页面 |
+| 来源小标签 | 每条任务前标出「Canvas」或「邮箱」，一眼看出这条是从哪来的 |
+
+> 只有两个注册点：`main`（整页面板）与 `sidebar.footer.action`（左下角角标）。
+> **刻意不注册 `sidebar.panellist`**：有些第三方侧边栏插件自带一栏叫「任务」
+> （例如 `dsh-better-sidebar` 的「任务管理」= 子代理拓扑 + 后台任务），两个同名入口并排会被当成功能重复。
 
 - **两级排序**：有截止时间的按截止时间**从近到远**排在前面；没有截止时间的（含**已经开始过的活动**）按**重要程度**降序排在后面。
 - **「截止」和「活动」分开算**：只有真正的截止时间才会标「已逾期」；讲座、比赛、招募这类**活动开始时间**只当参考，过期了也不标红，还会退到「无时间」那组按重要度排。
@@ -80,7 +84,7 @@ apply.bat             :: 真正安装
 
 脚本里**没有任何写死的路径**：插件目录由脚本自身位置推出（`install\` 的上一级就是包根），profile 由 `%DSH_HOME%`（没设就用 `%USERPROFILE%\.dsh`）下的 `profiles\desktop` 推出 —— 没有 `desktop` 就取那个唯一的、带 `package.json` 的 profile。想手动指定就加 `-ProfileDir <路径>` / `-PluginDir <路径>`（例如 `apply.bat -DryRun -ProfileDir D:\some\.dsh\profiles\work`）。
 
-然后**重启 DSH Desktop**。左侧栏应出现「任务」一行，左下角出现角标。
+然后**重启 DSH Desktop**。左下角应出现带数字的「待办 N」小按钮，点它切到整页清单。
 
 > **从旧版（Python bridge 那一版）迁移**：两版包名相同（`dsh-canvas-task-monitor`）、loader id 也相同（`canvas-task-monitor`），所以不用手工清理——先 `rollback.bat` 把旧版从 profile 里摘掉（它会用旧版自己留下的快照还原 profile），再按上面的 `apply.bat -DryRun` → `apply.bat` 装新版即可。顺序不能反：profile 里已有旧版痕迹时，apply 会以「部分存在、拒绝猜测」或「快照已存在」为由拒绝执行。
 
@@ -169,6 +173,7 @@ rollback.bat
 ## 6. 界面行为
 
 - **筛选条**：四个 chip 切换类别（全部 / 作业 / 活动 / 提醒），选中态是半透明的主题色，不抢视线；是否混入已完成任务由「显示已完成」开关单独控制。
+- **来源小标签**：卡片元信息最前面是「Canvas」（绿调）或「邮箱」（金调）小标签，鼠标悬停显示「来源：…」；文字色走主题变量，深浅色主题都可读。
 - **手动拉取**：右上角「拉取」按钮立刻跑一轮；正在跑时会拒绝重复触发。跑完在清单顶部留一行结果：「更新 3 条，自动完成 2 条，转为参加 1 条，AI 判定 4 次（1 条提示）」，出错时这一行是红的。
 - **完成 / 撤销**：勾选立刻写库；撤销条 8 秒后消失，面板卸载时也会清理定时器。自动勾掉的任务会在详情的「完成方式：」里说明是谁勾的（`Canvas 已提交` / `邮件确认报名成功`）。
 - **统计**：顶部显示总数、逾期、今日截止、最高紧急度。
@@ -182,7 +187,7 @@ dsh-canvas-task-monitor/
 ├─ cordis.patch.yml      # bundle loader 行（id: canvas-task-monitor）
 ├─ lib/
 │  ├─ index.js           # 宿主半区：配置、SQLite、同源 HTTP 路由 /canvas-task-monitor/api
-│  ├─ client.js          # 浏览器半区：侧边栏行 + 整页 + 左下角角标
+│  ├─ client.js          # 浏览器半区：整页 + 左下角角标（无侧边栏导航行，见 §1）
 │  ├─ config.js          # 配置默认值 / 归一化 / 原子保存 / 密钥掩码
 │  ├─ store.js           # node:sqlite 存储层（四张表，UPSERT 不碰 status）
 │  ├─ canvas.js          # Canvas 连接器（分页 / 限流 / 重试 / 回看窗口）
@@ -215,7 +220,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
 
-当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 117 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
+当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 121 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
 
 本版这四条判定修正（转发头时间不是截止时间、分类按内容、不计入总成绩降权、每轮完成对账）**每条都做过伪造对照**：把修复逐项回退到旧行为后，对应断言必须变红——例如关掉「变更门禁之外的完成对账」就报 `pipeline: 只有提交状态变了（哈希不变）也会自动勾掉 → 期望 1，实际 0`；不剥转发头就报 `转发头的发送时间不得成为截止时间：2026-09-25T06:11:00.000Z`；关掉内容分类就报 `期望 "reminder"，实际 "activity"`；关掉降权就报 `期望 1，实际 4`；客户端丢掉 `due_kind` 则三条活动渲染断言一起变红。改这些逻辑前请先跑一遍这套对照。
 
