@@ -2,10 +2,10 @@
 
 把 **Canvas LMS**（可选：**邮箱**）里的作业、公告、通知抓成一份可执行的待办清单，直接显示在 **DeepSeek Harness Desktop** 的侧边栏里。
 
-> 1.1 是**完全自包含**的插件：不依赖 Python、不依赖 sidecar 进程、不依赖任何 npm 运行时依赖（数据库用 Node 24 自带的 `node:sqlite`）。装一个包，重启 DSH Desktop，侧边栏就多一行「任务」。
+> 1.1 是**完全自包含**的插件：不依赖 Python、不依赖 sidecar 进程、不依赖任何 npm 运行时依赖（数据库用 Node 24 自带的 `node:sqlite`）。装一个包，重启 DSH Desktop，左上侧边栏「插件」下面会多一行「待办」。
 
 ```
-Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底）──► 完成对账 ──► SQLite ──► DSH 侧边栏「任务」
+Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底）──► 完成对账 ──► SQLite ──► DSH 侧边栏「待办」
 ```
 
 ---
@@ -14,13 +14,15 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
 
 | 区域 | 说明 |
 | --- | --- |
-| 左下角快捷角标 | 常驻小按钮（面板的**唯一入口**）：与 shell 自带的「更多」行同尺寸（44px 高 / 6px 内边距 / 24px 图标槽），文字写「待办 N」，右侧一个纯色小圆点（不再重复数字），点一下切到整页面板 |
+| 左上侧边栏「待办」行 | 面板的**唯一入口**：「插件」下面多一行，图标右上角挂一个数量胶囊，点一下切到整页面板 |
 | 主区域整页 | 完整任务清单：筛选条（全部 / 作业 / 活动 / 提醒）、「显示已完成」开关、手动「拉取」、统计、设置页 |
 | 来源小标签 | 每条任务前标出「Canvas」或「邮箱」，一眼看出这条是从哪来的 |
 
-> 只有两个注册点：`main`（整页面板）与 `sidebar.footer.action`（左下角角标）。
-> **刻意不注册 `sidebar.panellist`**：有些第三方侧边栏插件自带一栏叫「任务」
-> （例如 `dsh-better-sidebar` 的「任务管理」= 子代理拓扑 + 后台任务），两个同名入口并排会被当成功能重复。
+> 只有两个注册点：`main`（整页面板）与 `sidebar.panellist`（左上那一行的图标）。
+> `sidebar.panellist` 那一行由 shell 自己渲染（按钮、文字、点击、行高都由它管），
+> 插件只往里塞图标，所以不存在和 shell 自带那几行错位的问题；行标签固定写「待办」。
+> **不注册 `sidebar.footer.action`**：左下角那一行是 shell 自己的「更多」按钮，尺寸与缩进由它控制，
+> 插件塞进去很难对齐（试过一版，反而更难看），所以入口就固定在左上。
 
 - **两级排序**：有截止时间的按截止时间**从近到远**排在前面；没有截止时间的（含**已经开始过的活动**）按**重要程度**降序排在后面。
 - **「截止」和「活动」分开算**：只有真正的截止时间才会标「已逾期」；讲座、比赛、招募这类**活动开始时间**只当参考，过期了也不标红，还会退到「无时间」那组按重要度排。
@@ -84,7 +86,7 @@ apply.bat             :: 真正安装
 
 脚本里**没有任何写死的路径**：插件目录由脚本自身位置推出（`install\` 的上一级就是包根），profile 由 `%DSH_HOME%`（没设就用 `%USERPROFILE%\.dsh`）下的 `profiles\desktop` 推出 —— 没有 `desktop` 就取那个唯一的、带 `package.json` 的 profile。想手动指定就加 `-ProfileDir <路径>` / `-PluginDir <路径>`（例如 `apply.bat -DryRun -ProfileDir D:\some\.dsh\profiles\work`）。
 
-然后**重启 DSH Desktop**。左下角应出现带数字的「待办 N」小按钮，点它切到整页清单。
+然后**重启 DSH Desktop**。左上侧边栏「插件」下面会多一行「待办」（图标右上角是未完成数量），点它切到整页清单。
 
 > **从旧版（Python bridge 那一版）迁移**：两版包名相同（`dsh-canvas-task-monitor`）、loader id 也相同（`canvas-task-monitor`），所以不用手工清理——先 `rollback.bat` 把旧版从 profile 里摘掉（它会用旧版自己留下的快照还原 profile），再按上面的 `apply.bat -DryRun` → `apply.bat` 装新版即可。顺序不能反：profile 里已有旧版痕迹时，apply 会以「部分存在、拒绝猜测」或「快照已存在」为由拒绝执行。
 
@@ -118,7 +120,7 @@ rollback.bat
 
 里面有 `config.json`（配置，原子写入）和 `tasks.db`（SQLite，WAL 模式）。
 
-**推荐用界面配**：侧边栏「任务」→ 设置页，四组（Canvas / 邮箱 / AI / 拉取与评分），三个「测试连接」按钮分别验 Canvas、邮箱、AI。密钥字段留空表示不修改（输入框里是占位字 `已保存（留空表示不修改）`，字段名旁边还会挂一个 `已保存` 小标）——**看起来是空的并不代表值丢了**，值仍在 `config.json` 里，保存时会原样沿用。
+**推荐用界面配**：左上侧边栏「待办」→ 设置页，四组（Canvas / 邮箱 / AI / 拉取与评分），三个「测试连接」按钮分别验 Canvas、邮箱、AI。密钥字段留空表示不修改（输入框里是占位字 `已保存（留空表示不修改）`，字段名旁边还会挂一个 `已保存` 小标）——**看起来是空的并不代表值丢了**，值仍在 `config.json` 里，保存时会原样沿用。
 
 设置页顶部会写明「已读取配置：<路径>」（真读的是哪一份文件）以及宿主的配置体检结果；宿主万一没交出配置内容，页面会直接报出来并**禁用保存**，绝不会拿空表单把磁盘上的值覆盖掉。
 
@@ -177,7 +179,7 @@ rollback.bat
 - **手动拉取**：右上角「拉取」按钮立刻跑一轮；正在跑时会拒绝重复触发。跑完在清单顶部留一行结果：「更新 3 条，自动完成 2 条，转为参加 1 条，AI 判定 4 次（1 条提示）」，出错时这一行是红的。
 - **完成 / 撤销**：勾选立刻写库；撤销条 8 秒后消失，面板卸载时也会清理定时器。自动勾掉的任务会在详情的「完成方式：」里说明是谁勾的（`Canvas 已提交` / `邮件确认报名成功`）。
 - **统计**：顶部显示总数、逾期、今日截止、最高紧急度。
-- **左下角角标**：尺寸 / 圆角 / hover 底色都跟 shell 自带的「更多」行一致（44px 高、6px 内边距、24px 图标槽），文字是「待办 N」，右边那颗小圆点只表示「还有未完成」（纯色，不再重复数字）。装了 `dsh-plugin-wallpaper-engine` 并开了「侧栏液态玻璃」时，它会读该插件的全局玻璃令牌（`--we-sidebar-color / --we-sidebar-tint / --we-sidebar-blur / --we-sidebar-saturate / --we-sidebar-sheen` + `--we-glass-brightness`）自动变成同款磨砂玻璃，深色主题按该插件自己的 0.5 系数压暗；没装壁纸插件时保持原来的扁平外观。
+- **左上「待办」导航行**：行本身（按钮、文字、行高、点击）由 shell 渲染，我们只提供图标；标签固定「待办」，图标右上角的数量胶囊显示未完成数（超过 99 写 `99+`，一个都没有时不显示）。胶囊用的是**主题中性色**（不是状态红），装了 `dsh-plugin-wallpaper-engine` 并开了「侧栏液态玻璃」时，它会读该插件的全局玻璃令牌（`--we-sidebar-blur / --we-sidebar-saturate / --we-sidebar-sheen`）加上背景模糊与一圈内描边高光，底色仍然是主题中性色，所以深浅主题都读得出来；没装壁纸插件时保持原来的扁平外观。
 - **显示已完成**：开关切换是否把已完成任务混在列表里。
 
 ## 7. 架构
@@ -188,7 +190,7 @@ dsh-canvas-task-monitor/
 ├─ cordis.patch.yml      # bundle loader 行（id: canvas-task-monitor）
 ├─ lib/
 │  ├─ index.js           # 宿主半区：配置、SQLite、同源 HTTP 路由 /canvas-task-monitor/api
-│  ├─ client.js          # 浏览器半区：整页 + 左下角角标（无侧边栏导航行，见 §1）
+│  ├─ client.js          # 浏览器半区：整页 + 左上「待办」导航行图标（见 §1）
 │  ├─ config.js          # 配置默认值 / 归一化 / 原子保存 / 密钥掩码
 │  ├─ store.js           # node:sqlite 存储层（四张表，UPSERT 不碰 status）
 │  ├─ canvas.js          # Canvas 连接器（分页 / 限流 / 重试 / 回看窗口）
@@ -221,7 +223,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
 
-当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 134 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
+当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 133 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
 
 本版这四条判定修正（转发头时间不是截止时间、分类按内容、不计入总成绩降权、每轮完成对账）**每条都做过伪造对照**：把修复逐项回退到旧行为后，对应断言必须变红——例如关掉「变更门禁之外的完成对账」就报 `pipeline: 只有提交状态变了（哈希不变）也会自动勾掉 → 期望 1，实际 0`；不剥转发头就报 `转发头的发送时间不得成为截止时间：2026-09-25T06:11:00.000Z`；关掉内容分类就报 `期望 "reminder"，实际 "activity"`；关掉降权就报 `期望 1，实际 4`；客户端丢掉 `due_kind` 则三条活动渲染断言一起变红。改这些逻辑前请先跑一遍这套对照。
 

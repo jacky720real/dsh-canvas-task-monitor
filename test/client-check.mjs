@@ -374,37 +374,36 @@ else console.log('WARN  没找到真实 React，跳过 API 存在性校验');
 const ctx = { slots, get: () => undefined, logger: { debug() {}, info() {}, warn() {}, error() {} } };
 loaded.exports.apply(ctx);
 
-check('注册了 2 个槽位', registered.size === 2, [...registered.keys()].join(' | '));
-check('不注册侧边栏导航行（第三方侧边栏自带「任务」栏时会重名）', !registered.has('sidebar.panellist:canvas-task-monitor'), [...registered.keys()].join(' | '));
+check('注册了 2 个槽位（主面板 + 左上导航行）', registered.size === 2, [...registered.keys()].join(' | '));
 check('注册了主区域整页面板', registered.has('main:canvas-task-monitor'));
-check('注册了左下角角标', registered.has('sidebar.footer.action:canvas-task-monitor-badge'));
-check('角标 id 与 panel key 同源', registered.get('sidebar.footer.action:canvas-task-monitor-badge') !== undefined && registered.get('main:canvas-task-monitor').options.key === 'canvas-task-monitor', [...registered.keys()].join(' | '));
+check('注册了左上侧边栏导航行', registered.has('sidebar.panellist:canvas-task-monitor'));
+check('导航行的 id 与 panel key 同源', registered.get('sidebar.panellist:canvas-task-monitor') !== undefined && registered.get('main:canvas-task-monitor').options.key === 'canvas-task-monitor', [...registered.keys()].join(' | '));
+check('导航行标签是「待办」且不带数字', registered.get('sidebar.panellist:canvas-task-monitor').options.label === '待办', String(registered.get('sidebar.panellist:canvas-task-monitor').options.label));
+check('导航行注册在「插件」之后（order 40）', registered.get('sidebar.panellist:canvas-task-monitor').options.order === 40, String(registered.get('sidebar.panellist:canvas-task-monitor').options.order));
+check('不再是左下角角标（那一行交给 shell 自己的「更多」）', !registered.has('sidebar.footer.action:canvas-task-monitor-badge') && ![...registered.keys()].some((key) => key.startsWith('sidebar.footer.action')), [...registered.keys()].join(' | '));
 check('样式只注入一次', styles.length === 1, `${styles.length} 个 style`);
 
-const badge = registered.get('sidebar.footer.action:canvas-task-monitor-badge').component;
+const navIcon = registered.get('sidebar.panellist:canvas-task-monitor').component;
 const panel = registered.get('main:canvas-task-monitor').component;
 
-const badgeTree = renderInst({ component: badge, props: { wide: true }, hooks: [], hookIndex: 0 });
-check('角标窄栏时含“任务”', flatten(badgeTree).includes('任务'));
-check('角标自带图标', all(badgeTree, (node) => String(node.props.className ?? '') === 'ctm-badge-glyph').length === 1);
+const navTree = renderInst({ component: navIcon, props: { size: 18, active: false }, hooks: [], hookIndex: 0 });
+check('导航图标自带 svg', all(navTree, (node) => typeof node.type === 'function' || node.type === 'svg').length > 0);
+check('导航图标包在 .ctm-nav-icon 里（胶囊靠它定位）', all(navTree, (node) => String(node.props.className ?? '') === 'ctm-nav-icon').length === 1);
 
-// 角标外观：与左下角「更多」行对齐 / 红点不带数字 / 跟随 wallpaper 的全局玻璃主题
-const badgeCss = String(styles[0]?.textContent ?? '');
-const badgeRule = (selector) => {
-  const at = badgeCss.indexOf(selector);
-  return at < 0 ? '' : badgeCss.slice(at, badgeCss.indexOf('}', at) + 1);
+// 导航行外观：行尺寸归 shell / 数量胶囊不带红色 / 跟随 wallpaper 的全局玻璃主题
+const navCss = String(styles[0]?.textContent ?? '');
+const navRule = (selector) => {
+  const at = navCss.indexOf(selector);
+  return at < 0 ? '' : navCss.slice(at, navCss.indexOf('}', at) + 1);
 };
-const badgeBase = badgeRule('.ctm-badge {');
-check('角标行尺寸与左下角「更多」行一致', /height:44px/.test(badgeBase) && /padding:6px/.test(badgeBase) && /gap:8px/.test(badgeBase), badgeBase);
-check('角标 hover 用 shell 同款令牌', /--dsw-alias-interactive-bg-hover/.test(badgeRule('.ctm-badge:hover')), badgeRule('.ctm-badge:hover'));
-check('角标图标槽 24px（与「更多」头像同宽，文字左缘才对齐）', /width:24px/.test(badgeRule('.ctm-badge-glyph')), badgeRule('.ctm-badge-glyph'));
-check('角标折叠态 36×36', /width:36px/.test(badgeRule('.ctm-badge[data-collapsed="true"]')) && /height:36px/.test(badgeRule('.ctm-badge[data-collapsed="true"]')), badgeRule('.ctm-badge[data-collapsed="true"]'));
-check('红点是纯色圆点', /border-radius:50%/.test(badgeRule('.ctm-badge-dot {')) && /background:var\(--dsw-alias-label-tertiary/.test(badgeRule('.ctm-badge-dot {')), badgeRule('.ctm-badge-dot {'));
-check('红点错误态用主题错误色', /background:var\(--dsw-alias-state-error-primary/.test(badgeRule('.ctm-badge-dot[data-tone="hot"]')), badgeRule('.ctm-badge-dot[data-tone="hot"]'));
-check('旧的数字药丸样式已删除', !badgeCss.includes('ctm-badge-count'), '样式表里仍有 ctm-badge-count');
-check('角标识别 wallpaper 的全局玻璃主题', /body\[data-we-sidebar-glass\]\s*\.ctm-badge\s*\{/.test(badgeCss) && /backdrop-filter:blur\(var\(--we-sidebar-blur/.test(badgeCss) && /--we-sidebar-tint/.test(badgeCss) && /--we-sidebar-sheen/.test(badgeCss));
-check('壁纸玻璃下的角标底色走 --we-sidebar-color/tint', /color-mix\(in srgb, var\(--we-sidebar-color,#ffffff\) calc\(var\(--we-sidebar-tint,20%\) \* 0\.75\)/.test(badgeCss), '没找到浅色玻璃底色');
-check('深色主题下玻璃系数按壁纸插件的 0.5', /body\[data-ds-dark-theme\]\[data-we-sidebar-glass\]\s*\.ctm-badge\s*\{[^}]*--we-sidebar-tint,20%\)\s*\*\s*0\.5\)/.test(badgeCss), '没找到深色玻璃底色');
+check('不再有任何左下角角标样式', !navCss.includes('ctm-badge'), '样式表里仍有 ctm-badge');
+check('导航行不自定义行尺寸（交给 shell 的 .panelRow）', !/min-height:36px/.test(navRule('.ctm-nav-icon')) && !/height:44px/.test(navRule('.ctm-nav-icon')), navRule('.ctm-nav-icon'));
+check('胶囊相对图标定位', /position:absolute/.test(navRule('.ctm-nav-pill')) && /top:-5px/.test(navRule('.ctm-nav-pill')) && /right:-7px/.test(navRule('.ctm-nav-pill')), navRule('.ctm-nav-pill'));
+check('数量胶囊用主题中性色（不再用红色）', /--dsw-alias-bg-layer-3/.test(navRule('.ctm-nav-pill')) && /--dsw-alias-label-secondary/.test(navRule('.ctm-nav-pill')), navRule('.ctm-nav-pill'));
+check('整个样式表里没有状态红色了', !navCss.includes('state-error-primary'), '样式表里仍引用 state-error-primary');
+check('胶囊识别 wallpaper 的全局玻璃主题', /body\[data-we-sidebar-glass\]\s*\.ctm-nav-pill\s*\{/.test(navCss) && /backdrop-filter:blur\(var\(--we-sidebar-blur/.test(navCss) && /--we-sidebar-saturate/.test(navCss) && /--we-sidebar-sheen/.test(navCss), '没找到壁纸玻璃分支');
+check('壁纸玻璃下胶囊底色仍是主题中性色', /color-mix\(in srgb, var\(--dsw-alias-bg-layer-3/.test(navRule('body[data-we-sidebar-glass] .ctm-nav-pill')), navRule('body[data-we-sidebar-glass] .ctm-nav-pill'));
+check('壁纸玻璃下胶囊有一圈内描边高光', /inset 0 0 0 \.5px rgba\(255,255,255/.test(navRule('body[data-we-sidebar-glass] .ctm-nav-pill')), navRule('body[data-we-sidebar-glass] .ctm-nav-pill'));
 
 /* ------------------------------------------------- 排序函数（纯函数断言） */
 
@@ -641,13 +640,12 @@ byRole('back')[0].props.onClick();
 await settle();
 check('返回后回到任务列表', byClass('ctm-card').length === 3 && byRole('settings').length === 1);
 
-// 角标读到同一份 store
-const badgeAfter = renderInst({ component: badge, props: { wide: true }, hooks: [], hookIndex: 0 });
-check('角标显示待办数', flatten(badgeAfter).includes('待办 3'), flatten(badgeAfter));
-const badgeDots = all(badgeAfter, (node) => String(node.props.className ?? '') === 'ctm-badge-dot');
-check('角标红点只有一个且不带数字', badgeDots.length === 1 && flatten(badgeDots[0]) === '', `${badgeDots.length} 个红点，文本="${badgeDots.map((n) => flatten(n)).join('|')}"`);
-check('角标红点是纯色（有未完成 → hot）', badgeDots[0]?.props['data-tone'] === 'hot', String(badgeDots[0]?.props['data-tone']));
-check('角标里不再出现重复的数字药丸', all(badgeAfter, (node) => String(node.props.className ?? '') === 'ctm-badge-count').length === 0);
+// 导航图标读到同一份 store
+const navAfter = renderInst({ component: navIcon, props: { size: 18, active: false }, hooks: [], hookIndex: 0 });
+const navPills = all(navAfter, (node) => String(node.props.className ?? '') === 'ctm-nav-pill');
+check('导航图标上的胶囊显示待办数', navPills.length === 1 && flatten(navPills[0]) === '3', `${navPills.length} 个胶囊，文本="${navPills.map((n) => flatten(n)).join('|')}"`);
+check('胶囊默认是中性的 plain 色调', navPills[0]?.props['data-tone'] === 'plain', String(navPills[0]?.props['data-tone']));
+check('导航行本身不再出现「待办 3」这种带数字的文字', !flatten(navAfter).includes('待办 3'), flatten(navAfter));
 
 /* --------------------------- 活动时间不是截止时间 + 自动完成的“完成方式” */
 
