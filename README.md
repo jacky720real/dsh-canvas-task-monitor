@@ -14,7 +14,7 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
 
 | 区域 | 说明 |
 | --- | --- |
-| 左上侧边栏「待办」行 | 面板的**唯一入口**：「插件」下面多一行，图标右上角挂一个数量胶囊，点一下切到整页面板 |
+| 左上侧边栏「待办」行 | 面板的**唯一入口**：「插件」下面多一行，行的右端挂一个数量胶囊（`（图标） 待办 … 59`），点一下切到整页面板 |
 | 主区域整页 | 完整任务清单：筛选条（全部 / 作业 / 活动 / 提醒）、「显示已完成」开关、手动「拉取」、统计、设置页 |
 | 来源小标签 | 每条任务前标出「Canvas」或「邮箱」，一眼看出这条是从哪来的 |
 
@@ -86,7 +86,7 @@ apply.bat             :: 真正安装
 
 脚本里**没有任何写死的路径**：插件目录由脚本自身位置推出（`install\` 的上一级就是包根），profile 由 `%DSH_HOME%`（没设就用 `%USERPROFILE%\.dsh`）下的 `profiles\desktop` 推出 —— 没有 `desktop` 就取那个唯一的、带 `package.json` 的 profile。想手动指定就加 `-ProfileDir <路径>` / `-PluginDir <路径>`（例如 `apply.bat -DryRun -ProfileDir D:\some\.dsh\profiles\work`）。
 
-然后**重启 DSH Desktop**。左上侧边栏「插件」下面会多一行「待办」（图标右上角是未完成数量），点它切到整页清单。
+然后**重启 DSH Desktop**。左上侧边栏「插件」下面会多一行「待办」（这一行的右端是未完成数量），点它切到整页清单。
 
 > **从旧版（Python bridge 那一版）迁移**：两版包名相同（`dsh-canvas-task-monitor`）、loader id 也相同（`canvas-task-monitor`），所以不用手工清理——先 `rollback.bat` 把旧版从 profile 里摘掉（它会用旧版自己留下的快照还原 profile），再按上面的 `apply.bat -DryRun` → `apply.bat` 装新版即可。顺序不能反：profile 里已有旧版痕迹时，apply 会以「部分存在、拒绝猜测」或「快照已存在」为由拒绝执行。
 
@@ -179,7 +179,7 @@ rollback.bat
 - **手动拉取**：右上角「拉取」按钮立刻跑一轮；正在跑时会拒绝重复触发。跑完在清单顶部留一行结果：「更新 3 条，自动完成 2 条，转为参加 1 条，AI 判定 4 次（1 条提示）」，出错时这一行是红的。
 - **完成 / 撤销**：勾选立刻写库；撤销条 8 秒后消失，面板卸载时也会清理定时器。自动勾掉的任务会在详情的「完成方式：」里说明是谁勾的（`Canvas 已提交` / `邮件确认报名成功`）。
 - **统计**：顶部显示总数、逾期、今日截止、最高紧急度。
-- **左上「待办」导航行**：行本身（按钮、文字、行高、点击）由 shell 渲染，我们只提供图标；标签固定「待办」，图标右上角的数量胶囊显示未完成数（超过 99 写 `99+`，一个都没有时不显示）。胶囊用的是**主题中性色**（不是状态红），装了 `dsh-plugin-wallpaper-engine` 并开了「侧栏液态玻璃」时，它会读该插件的全局玻璃令牌（`--we-sidebar-blur / --we-sidebar-saturate / --we-sidebar-sheen`）加上背景模糊与一圈内描边高光，底色仍然是主题中性色，所以深浅主题都读得出来；没装壁纸插件时保持原来的扁平外观。
+- **左上「待办」导航行**：行本身（按钮、文字、行高、点击）由 shell 渲染，我们只提供图标；标签固定「待办」，**行的右端**（原来那个小圆坨的位置）挂一个数量胶囊，也就是 `（图标） 待办 … 59`：未完成数超过 99 写 `99+`，一个都没有时整个胶囊不渲染。胶囊用的是**主题中性色**（不是状态红），装了 `dsh-plugin-wallpaper-engine` 并开了「侧栏液态玻璃」时，它会读该插件的全局玻璃令牌（`--we-sidebar-color / --we-sidebar-tint / --we-sidebar-blur / --we-sidebar-saturate / --we-sidebar-sheen`）做半透明磨砂 + 一圈内描边高光，数字就在胶囊里面；没装壁纸插件时保持扁平外观。折叠态那一行只有 36×36、文字被 shell 藏起来，胶囊自动退回贴在图标右上角。
 - **显示已完成**：开关切换是否把已完成任务混在列表里。
 
 ## 7. 架构
@@ -223,7 +223,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
 
-当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 133 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
+当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 136 / `mail-check` 148 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
 
 本版这四条判定修正（转发头时间不是截止时间、分类按内容、不计入总成绩降权、每轮完成对账）**每条都做过伪造对照**：把修复逐项回退到旧行为后，对应断言必须变红——例如关掉「变更门禁之外的完成对账」就报 `pipeline: 只有提交状态变了（哈希不变）也会自动勾掉 → 期望 1，实际 0`；不剥转发头就报 `转发头的发送时间不得成为截止时间：2026-09-25T06:11:00.000Z`；关掉内容分类就报 `期望 "reminder"，实际 "activity"`；关掉降权就报 `期望 1，实际 4`；客户端丢掉 `due_kind` 则三条活动渲染断言一起变红。改这些逻辑前请先跑一遍这套对照。
 

@@ -397,13 +397,19 @@ const navRule = (selector) => {
   return at < 0 ? '' : navCss.slice(at, navCss.indexOf('}', at) + 1);
 };
 check('不再有任何左下角角标样式', !navCss.includes('ctm-badge'), '样式表里仍有 ctm-badge');
-check('导航行不自定义行尺寸（交给 shell 的 .panelRow）', !/min-height:36px/.test(navRule('.ctm-nav-icon')) && !/height:44px/.test(navRule('.ctm-nav-icon')), navRule('.ctm-nav-icon'));
-check('胶囊相对图标定位', /position:absolute/.test(navRule('.ctm-nav-pill')) && /top:-5px/.test(navRule('.ctm-nav-pill')) && /right:-7px/.test(navRule('.ctm-nav-pill')), navRule('.ctm-nav-pill'));
-check('数量胶囊用主题中性色（不再用红色）', /--dsw-alias-bg-layer-3/.test(navRule('.ctm-nav-pill')) && /--dsw-alias-label-secondary/.test(navRule('.ctm-nav-pill')), navRule('.ctm-nav-pill'));
+const navIconRule = navRule('.ctm-nav-icon {');
+const navPillRule = navRule('.ctm-nav-pill {');
+const navRowRule = navRule('button[class*="panelRow"]:has(.ctm-nav-icon)');
+check('导航行不自定义行尺寸（交给 shell 的 .panelRow）', !/min-height:36px/.test(navIconRule) && !/height:44px/.test(navIconRule), navIconRule);
+check('把导航行临时变成定位参照（胶囊要贴整行右端）', /position:relative/.test(navRowRule), navRowRule);
+check('图标自己不是定位元素（否则胶囊会跑到「待办」左边）', !/position:relative/.test(navIconRule) && !/position:absolute/.test(navIconRule), navIconRule);
+check('胶囊贴整行右端并垂直居中', /position:absolute/.test(navPillRule) && /top:50%/.test(navPillRule) && /right:8px/.test(navPillRule) && /translateY\(-50%\)/.test(navPillRule), navPillRule);
+check('数量胶囊用主题中性色（不再用红色）', /--dsw-alias-bg-layer-3/.test(navPillRule) && /--dsw-alias-label-secondary/.test(navPillRule), navPillRule);
 check('整个样式表里没有状态红色了', !navCss.includes('state-error-primary'), '样式表里仍引用 state-error-primary');
 check('胶囊识别 wallpaper 的全局玻璃主题', /body\[data-we-sidebar-glass\]\s*\.ctm-nav-pill\s*\{/.test(navCss) && /backdrop-filter:blur\(var\(--we-sidebar-blur/.test(navCss) && /--we-sidebar-saturate/.test(navCss) && /--we-sidebar-sheen/.test(navCss), '没找到壁纸玻璃分支');
-check('壁纸玻璃下胶囊底色仍是主题中性色', /color-mix\(in srgb, var\(--dsw-alias-bg-layer-3/.test(navRule('body[data-we-sidebar-glass] .ctm-nav-pill')), navRule('body[data-we-sidebar-glass] .ctm-nav-pill'));
+check('壁纸玻璃下胶囊底色走 --we-sidebar-color/tint', /color-mix\(in srgb, var\(--we-sidebar-color/.test(navRule('body[data-we-sidebar-glass] .ctm-nav-pill')), navRule('body[data-we-sidebar-glass] .ctm-nav-pill'));
 check('壁纸玻璃下胶囊有一圈内描边高光', /inset 0 0 0 \.5px rgba\(255,255,255/.test(navRule('body[data-we-sidebar-glass] .ctm-nav-pill')), navRule('body[data-we-sidebar-glass] .ctm-nav-pill'));
+check('折叠态胶囊退回图标右上角', /\[class\*="_collapsed"\] \.ctm-nav-pill/.test(navCss) && /top:-4px/.test(navRule('[class*="_collapsed"] .ctm-nav-pill')), navRule('[class*="_collapsed"] .ctm-nav-pill'));
 
 /* ------------------------------------------------- 排序函数（纯函数断言） */
 
