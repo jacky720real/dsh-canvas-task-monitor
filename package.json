@@ -1,6 +1,6 @@
 {
   "name": "dsh-canvas-task-monitor",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "Canvas 学习任务监控插件：拉取 Canvas（可选邮箱）→ 变更检测 → 规则/AI 评分 → 在 DSH 主区域面板与左上侧边栏「待办」入口显示任务清单。自包含、零运行时依赖。",
   "license": "MIT",
   "repository": {

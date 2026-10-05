@@ -216,6 +216,14 @@ class FakeSocket extends EventEmitter {
     if (!route) {
       throw new Error(`假 socket 没有这条命令的录像：${line.trim()}`);
     }
+    // close 录像：不回复、直接断链 —— 用来模拟"连接已经死了"（比等真实超时快得多）
+    if (route.close === true) {
+      setImmediate(() => {
+        if (this.destroyed) return;
+        this.emit('close', false);
+      });
+      return true;
+    }
     this.deliver(route.reply);
     return true;
   }
@@ -717,6 +725,60 @@ async function imapTests() {
   equal(failResult.warnings.length, 2, '无正文的那封与服务器没回的那封各转成一条警告');
   check('警告里带序号 1', failResult.warnings.some((w) => w.includes('1')), failResult.warnings);
   check('警告里带序号 2', failResult.warnings.some((w) => w.includes('2')), failResult.warnings);
+
+  // 连接死了不能再一封封磨：批量 FETCH 断连 → 只重连一次 → 逐封回退熔断
+  const deadRoutes = [
+    { test: /^a\d+ LOGIN /, reply: 'a1 OK LOGIN completed\r\n' },
+    { test: /^a\d+ ID /, reply: '* ID ("name" "Dovecot")\r\na2 OK ID completed\r\n' },
+    { test: /^a\d+ SELECT /, reply: '* 2 EXISTS\r\na3 OK [READ-ONLY] SELECT completed\r\n' },
+    { test: /^a\d+ SEARCH /, reply: '* SEARCH 1 2 3 4 5 6 7 8\r\na4 OK SEARCH completed\r\n' },
+    { test: /^a\d+ FETCH /, close: true },
+    { test: /^a\d+ LOGOUT/, close: true },
+  ];
+  const deadSockets = [];
+  const deadResult = await fetchMail(IMAP_CONFIG, {
+    connect: createSocketFactory(deadSockets, deadRoutes, 7),
+    now: clock.now,
+    logger: silentLogger(),
+    sleep: clock.sleep,
+  });
+  const deadFetches = deadSockets.reduce(
+    (total, socket) => total + socket.writes.filter((line) => / FETCH /.test(line)).length,
+    0,
+  );
+  equal(deadResult.items.length, 0, '连接死了取不回任何邮件');
+  equal(deadSockets.length, 2, '批量 FETCH 断连后只重连一次（一共建 2 个连接）');
+  equal(deadFetches, 5, '熔断后一共只发 5 条 FETCH（1 批 + 重连 1 批 + 3 封单取），而不是把 8 封逐封磨完');
+  check(
+    '熔断写一条汇总警告（带还剩下几封）',
+    deadResult.warnings.some((w) => w.includes('邮箱连接不可用，本次邮箱拉取提前结束') && w.includes('还剩 5 封未取')),
+    deadResult.warnings,
+  );
+
+  // 邮箱慢到超过总预算：一批都不该发出去（免得把整轮拉取挟持十几分钟）
+  let nowCalls = 0;
+  const jumpyNow = () => {
+    nowCalls += 1;
+    return 1_700_000_000_000 + Math.max(0, nowCalls - 1) * 200_000;
+  };
+  const budgetSockets = [];
+  const budgetResult = await fetchMail(IMAP_CONFIG, {
+    connect: createSocketFactory(budgetSockets, IMAP_ROUTES, 7),
+    now: jumpyNow,
+    logger: silentLogger(),
+    sleep: async () => {},
+  });
+  const budgetFetches = budgetSockets.reduce(
+    (total, socket) => total + socket.writes.filter((line) => / FETCH /.test(line)).length,
+    0,
+  );
+  equal(budgetResult.items.length, 0, '超出预算时不出条目');
+  equal(budgetFetches, 0, '超出预算时一条 FETCH 都不发');
+  check(
+    '预算用尽写一条汇总警告',
+    budgetResult.warnings.some((w) => w.includes('邮箱响应太慢，本次邮箱拉取提前结束')),
+    budgetResult.warnings,
+  );
 
   // 服务器 NO → 抛出并带服务器原文
   const noRoutes = [
