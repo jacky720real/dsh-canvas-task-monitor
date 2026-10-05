@@ -45,6 +45,8 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
 
 ### 邮箱（默认关闭，可选）
 - **IMAP**：`993` SSL + 账号密码，读 `folders`（默认 `INBOX`）中 `lookbackDays` 内的邮件。登录后会按 **RFC 2971 发一条 `ID`** 通报客户端身份——网易邮箱（163 / 126 / yeah.net）不发这条就会被 `SELECT` 拒掉（`NO SELECT Unsafe Login`），所以这是必需的；服务器不认 `ID` 回 `BAD` 时会被忽略，不影响其他邮箱。网易需要先在网页端开启 IMAP 服务，密码栏填 **16 位授权码**而不是登录密码。
+- **只取正文开头 8 KB（partial fetch）**：命令是 `FETCH <序号> (BODY.PEEK[]<0.8192>)`，每批 8 封。这不是抠门，是真机实测逼出来的——163（Coremail）吐整封信只有约 **5 KB/s**：`FETCH 1:3 (BODY.PEEK[])` 要 **19.7 秒**、`FETCH 1:20 (BODY.PEEK[])` **35 秒都没有完成行**、单封 `FETCH 1 (BODY.PEEK[])` 也要 **29.9 秒**（顶满 30 秒 socket 超时）。改成截前 8 KB 之后：单封 **0.5 秒**、20 封 **11 秒**，真机一轮 68 封 **48 秒**全部取回（主题 / 发件人 / 收信时间 / 正文预览都够用，判定与完成对账只用这些）。**别退回 `BODY.PEEK[]`**，`test/mail-check.mjs` 里钉了一条断言。
+- **正文片段没有 charset 时退化成 utf-8**：截断的 MIME 常常缺 charset 声明，过去会让整封信解析失败；现在照样产出条目（只有主题也能判定），真机上这一条把 6 封失败降成了 0。
 - **Microsoft Graph**：仅支持 **client credentials**（应用权限），需要 `tenantId` / `clientId` / `clientSecret` / `user`；**不支持**授权码或设备码登录。
 - 可选 `senderDomains` 白名单（留空表示全部收件）。
 - 邮件的标题、摘要、课程、截止时间**由 AI 从主题和正文前若干字符推断**——邮箱本身没有结构化的截止时间。所以要用邮箱来源，务必先配好 AI。
@@ -229,7 +231,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
 
-当前项数：`manifest-check` 48 / `host-check` 72 / `canvas-check` 77 / `client-check` 139 / `mail-check` 158 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
+当前项数：`manifest-check` 48 / `host-check` 72 / `canvas-check` 77 / `client-check` 139 / `mail-check` 159 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
 
 本版这四条判定修正（转发头时间不是截止时间、分类按内容、不计入总成绩降权、每轮完成对账）**每条都做过伪造对照**：把修复逐项回退到旧行为后，对应断言必须变红——例如关掉「变更门禁之外的完成对账」就报 `pipeline: 只有提交状态变了（哈希不变）也会自动勾掉 → 期望 1，实际 0`；不剥转发头就报 `转发头的发送时间不得成为截止时间：2026-09-25T06:11:00.000Z`；关掉内容分类就报 `期望 "reminder"，实际 "activity"`；关掉降权就报 `期望 1，实际 4`；客户端丢掉 `due_kind` 则三条活动渲染断言一起变红。改这些逻辑前请先跑一遍这套对照。
 

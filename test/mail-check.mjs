@@ -618,6 +618,10 @@ async function imapTests() {
   equal(sockets.length, 1, 'IMAP 走注入的 connect（只建一个连接）');
   equal(result.items.length, 2, '解析出 2 封邮件');
   equal(result.warnings.length, 0, '两封都能解析，无警告');
+  /* 只取正文开头一段：163 上"取整封信"实测 ~5 KB/s（3 封要 20 秒、20 封 35 秒都没有完成行），
+     所以命令必须是 partial fetch（`BODY.PEEK[]<0.N>`），不能退回 BODY.PEEK[]。 */
+  const fetchCommand = sockets[0].writes.find((line) => / FETCH /.test(line)) ?? '';
+  check('FETCH 用 partial（只取前若干 KB），不取整封信', /BODY\.PEEK\[\]<0\.\d+>/.test(fetchCommand), fetchCommand.trim());
 
   // 录音字节账本：{n} 一律由 MESSAGE_*_BYTES 算出，这里核对它与实际载荷一致。
   equal(
@@ -721,9 +725,15 @@ async function imapTests() {
     logger: silentLogger(),
     sleep: clock.sleep,
   });
-  equal(failResult.items.length, 0, '没有可解析正文时不产出条目');
-  equal(failResult.warnings.length, 2, '无正文的那封与服务器没回的那封各转成一条警告');
-  check('警告里带序号 1', failResult.warnings.some((w) => w.includes('1')), failResult.warnings);
+  /* 缺 charset / 没有正文的邮件不再整封丢掉：主题、发件人、时间都能用，
+     所以仍然产出一条（真机 163 上截断的 MIME 常常没有 charset 声明）。 */
+  equal(failResult.items.length, 1, '缺 charset 的信仍然产出条目（只靠主题也能判定）');
+  check(
+    '缺 charset 的那封主题保留下来了',
+    failResult.items[0]?.payload?.subject === 'no body',
+    JSON.stringify(failResult.items[0]?.payload),
+  );
+  equal(failResult.warnings.length, 1, '只有"服务器没回的那封"留一条警告');
   check('警告里带序号 2', failResult.warnings.some((w) => w.includes('2')), failResult.warnings);
 
   // 日志脱敏：LOGIN 命令里的账号与授权码绝不能落进日志（宿主 debug 日志会写文件）
