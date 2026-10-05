@@ -743,8 +743,8 @@ async function imapTests() {
   const loginLines = logLines.filter((line) => line.includes('LOGIN'));
   check('IMAP 日志里仍有 LOGIN 命令（方便排查）', loginLines.some((line) => line.includes('a1 LOGIN')), logLines.join(' | '));
   check(
-    'IMAP 日志里不出现明文账号/授权码',
-    loginLines.length > 0 && !logLines.some((line) => line.includes('p@ss') || line.includes('stu')),
+    'IMAP 日志里不出现明文授权码（账号保留、密码打星）',
+    loginLines.length > 0 && !logLines.some((line) => line.includes('p@ss')) && loginLines.some((line) => line.includes('"***"')),
     loginLines.join(' | '),
   );
 
@@ -818,6 +818,12 @@ async function imapTests() {
     authError = error;
   }
   check('LOGIN NO 会从 fetchMail 抛出（连接级失败）', authError !== null, authError && authError.message);
+  // 错误文本会回到面板、也会进宿主日志 —— 里面的授权码同样必须打星
+  check(
+    '报错文本里也不出现明文授权码',
+    authError !== null && !authError.message.includes('p@ss') && authError.message.includes('"***"'),
+    authError && authError.message,
+  );
   // 服务端原文是 `a1 NO [AUTHENTICATIONFAILED] Invalid credentials`；实现会把
   // `[...]` 响应码拆出去，只把人类可读部分带进错误信息。
   check(

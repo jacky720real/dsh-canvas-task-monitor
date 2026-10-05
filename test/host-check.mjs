@@ -616,6 +616,48 @@ await checkAsync('llm: scoreItems 只在 AI 可用时工作，并报告 settled'
   eq(on.drafts.get('mail\u0000graph:1').title, 'T', '草稿标题');
   eq(on.drafts.get('mail\u0000graph:1').score, 44, '2*10+3*8=44');
 });
+await checkAsync('llm: 批次并发发送（ai.concurrency，默认 2）', async () => {
+  const items = [
+    { source: 'mail', external_id: 'graph:1', change_type: 'new', course_id: null, payload: {} },
+    { source: 'mail', external_id: 'graph:2', change_type: 'new', course_id: null, payload: {} },
+    { source: 'mail', external_id: 'graph:3', change_type: 'new', course_id: null, payload: {} },
+  ];
+  const makeTracked = () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchImpl = async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+      return jsonResponse({ choices: [{ message: { content: '{"tasks":[]}' } }] });
+    };
+    return { fetchImpl, peak: () => maxInFlight };
+  };
+  const run = async (ai) => {
+    const tracked = makeTracked();
+    const result = await scoreItems(items, { ...aiConfig, batchSize: 1, ...ai }, {
+      weights: {},
+      sleep: async () => {},
+      fetchImpl: tracked.fetchImpl,
+    });
+    return { result, peak: tracked.peak() };
+  };
+
+  const serial = await run({ concurrency: 1 });
+  eq(serial.peak, 1, 'concurrency=1 时一次只有一个批次在飞');
+  eq(serial.result.calls, 3, '串行也是 3 次请求');
+
+  const parallel = await run({ concurrency: 3 });
+  eq(parallel.peak, 3, 'concurrency=3 时三个批次同时在飞（不再一批批等）');
+  eq(parallel.result.ok, true, '并发结果仍 ok');
+  eq(parallel.result.calls, 3, '并发不改变请求数');
+  eq(parallel.result.settled.size, 3, '每批都 settled');
+
+  const byDefault = await run({});
+  eq(byDefault.peak, 2, '不写 ai.concurrency 时默认并发 2');
+});
+
 await checkAsync('llm: 全部批次失败 → ok=false 且 settled 为空', async () => {
   const items = [{ source: 'mail', external_id: 'graph:1', change_type: 'new', course_id: null, payload: {} }];
   const result = await scoreItems(items, aiConfig, {
@@ -806,6 +848,61 @@ await checkAsync('pipeline: 逐源隔离 + 课程缺 id 只告警 + 单课失败
   assert(stats.warnings.some((text) => text.includes('缺少 id')), '缺 id 的课程要告警');
   assert(stats.warnings.some((text) => text.includes('拉取失败')), '课程 2 失败要告警但不致命');
   eq(store.listTasks({}).length, 2, '库里有两条');
+});
+
+await checkAsync('pipeline: Canvas 与邮箱的抓取并发进行（两段延迟不再相加）', async () => {
+  const dir = join(root, 'parallel');
+  const order = [];
+  const config = normalizeConfig({
+    canvas: { enabled: true, baseUrl: 'https://canvas.test', token: 'tok-123', lookbackDays: 30 },
+    mail: {
+      enabled: true,
+      provider: 'graph',
+      tenantId: 'tenant',
+      clientId: 'client',
+      clientSecret: 'secret',
+      user: 'me@example.com',
+      lookbackDays: 7,
+    },
+    ai: { enabled: false },
+  });
+  const fetchImpl = async (url) => {
+    const href = String(url);
+    if (href.includes('login.microsoftonline.com')) {
+      return jsonResponse({ access_token: 'graph-token', expires_in: 3600 });
+    }
+    if (href.includes('graph.microsoft.com')) {
+      order.push('mail-start');
+      return jsonResponse({ value: [] });
+    }
+    if (href.includes('/assignments')) {
+      order.push('canvas-start');
+      // 故意比邮箱慢：串行实现下这条 await 结束之前，邮箱根本不会被调用
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      order.push('canvas-end');
+      return jsonResponse([]);
+    }
+    if (href.includes('/announcements')) return jsonResponse([]);
+    if (href.includes('/api/v1/courses')) return jsonResponse([{ id: 1, name: 'Course A' }]);
+    return new Response('not found', { status: 404 });
+  };
+  const store = openStore(dbPathIn(dir));
+  const stats = await pollOnce({
+    dataDir: dir,
+    config,
+    store,
+    fetchImpl,
+    sleep: async () => {},
+    logger: null,
+    nowMs,
+  });
+
+  eq(stats.sources, 2, '两个源都要跑');
+  assert(order.includes('mail-start'), `邮箱必须真的被调用：${order.join(',')}`);
+  assert(
+    order.indexOf('mail-start') < order.indexOf('canvas-end'),
+    `邮箱要在 Canvas 抓完之前就开始（并发而不是串行）：${order.join(',')}`,
+  );
 });
 
 await checkAsync('pipeline: Canvas 未配置时跳过并记错误，邮箱启用但缺配置也跳过', async () => {

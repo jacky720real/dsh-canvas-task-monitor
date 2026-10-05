@@ -70,6 +70,8 @@ Canvas / 邮箱 ──► 变更检测 ──► 规则评分（可选 AI 兜底
 - **AI 不许推翻内容判定**：素材里写着「成绩已发布 / 不计入总成绩」这类事实时，规则给出的分类与降级后的重要度会**上锁**——AI 可以继续往下调，但不能把它抬回「活动 / 重要 4」（真机实测：`Quiz 3 Grades` 被规则判成「提醒 / 重要 1」，模型看到标题里的 Quiz 又抬了回去，用户投诉的就是这个）。锁只在规则**确实按内容降过级**时生效，普通条目的分类与重要度照旧由 AI 定。
 - **AI 输出预算**：默认 `maxOutputTokens: 8000` / `batchSize: 6`，而且**批次会自动缩**——按 `(maxOutputTokens - 1024) / 1200` 反推一个批最多塞几条。原因是 `deepseek-flash` / `deepseek-reasoner` 这类**推理模型**会先花 token 写 `reasoning_content`：给 4000 预算、塞 15 条素材时 4000 token 全被思考吃光，`finish_reason=length` 且 `content` 是空的，整批判定白跑。现在遇到这种截断会**自动对半拆批重试**（单条还失败才报错并明确提示「调大 `ai.maxOutputTokens` 或调小 `ai.batchSize`」），并且只有**真的解析出 JSON** 的素材才算处理过（写进快照）；解析失败的下轮还会再试。
 - AI 与规则都可用时：AI 的返回值只在**字段非空**时覆盖规则结果，但「内容判定锁」与 `due_at` 护栏除外（`due_at` 另有一套规则：AI 说「没有截止时间」就能清掉规则从转发头里误抓的日期，反过来 AI 编的时间若早于收信时间会被丢掉，Canvas 自己给的截止时间永远不许改）。AI 挂了整轮降级为规则结果，不会因为没有 AI 就不出任务。
+- **批次并发**：`ai.concurrency`（默认 **2**，可调 1–4）决定同时发几个批次。批次之间互不依赖，而推理模型单批常要几十秒——串行 3 批就是三倍等待。默认 2 是"明显更快"与"别把上游打限流"之间的折中；上游限流严格就调到 1，想再快就调到 3–4。
+- **两个源并发抓取**：Canvas 与邮箱的网络阶段**同时**跑（各自带自己的限流桶），写库仍按顺序串行。过去是「Canvas 拉完再拉邮箱」，两段延迟直接相加；现在总时长≈较慢的那一个。想让 Canvas 段更快，可以把 `canvas.requestsPerSecond`（默认 3）提到 6–8。
 
 ## 4. 安装
 
@@ -163,7 +165,8 @@ rollback.bat
     "temperature": 0.1,
     "maxOutputTokens": 8000,
     "timeoutMs": 60000,
-    "batchSize": 6
+    "batchSize": 6,
+    "concurrency": 2
   },
   "poll": { "autoPull": true, "intervalSeconds": 600 },
   "scoring": { "urgencyWeight": 10, "importanceWeight": 8 }
@@ -226,7 +229,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
 
-当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 137 / `mail-check` 157 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
+当前项数：`manifest-check` 48 / `host-check` 67 / `canvas-check` 77 / `client-check` 137 / `mail-check` 158 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
 
 本版这四条判定修正（转发头时间不是截止时间、分类按内容、不计入总成绩降权、每轮完成对账）**每条都做过伪造对照**：把修复逐项回退到旧行为后，对应断言必须变红——例如关掉「变更门禁之外的完成对账」就报 `pipeline: 只有提交状态变了（哈希不变）也会自动勾掉 → 期望 1，实际 0`；不剥转发头就报 `转发头的发送时间不得成为截止时间：2026-09-25T06:11:00.000Z`；关掉内容分类就报 `期望 "reminder"，实际 "activity"`；关掉降权就报 `期望 1，实际 4`；客户端丢掉 `due_kind` 则三条活动渲染断言一起变红。改这些逻辑前请先跑一遍这套对照。
 
