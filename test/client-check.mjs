@@ -713,6 +713,30 @@ taskRows = [
     created_at: iso(-9 * DAY),
     updated_at: iso(-9 * DAY),
   },
+  {
+    // 已完成 + 已过期：不该再顶一个"已逾期"徽标（用户实测投诉过）
+    id: 903,
+    source: 'mail',
+    external_id: 'imap:essay-overdue-done',
+    category: 'reminder',
+    title: '议论文作业（40%）要求提醒',
+    summary: 'Canvas 侧已完成：议论文作业',
+    course: 'GE1401T42 University English',
+    due_at: iso(-2 * DAY),
+    due_kind: 'deadline',
+    urgency: 4,
+    importance: 3,
+    score: 64,
+    tags: [],
+    is_rule: false,
+    urgency_reason: '',
+    importance_reason: '',
+    status: 'done',
+    status_source: 'mail',
+    status_note: 'Canvas 侧已完成：议论文作业',
+    created_at: iso(-9 * DAY),
+    updated_at: iso(-9 * DAY),
+  },
 ];
 rootInst = { component: panel, props: {}, hooks: [], hookIndex: 0, effects: {}, parent: null, tree: null };
 renderInst(rootInst);
@@ -733,11 +757,24 @@ check('活动行的元信息用“活动 …”前缀', eventBody.includes('活�
 byRole('show-done')[0].props.onChange({ target: { checked: true } });
 await settle();
 
+/* 已完成 + 已过期：只写日期（已完成），不许再出现"已逾期"徽标 */
+const doneOverdueBody = flatten(rootInst.tree);
+check(
+  '已完成的任务不再显示“已逾期”徽标',
+  byClass('ctm-flag').every((node) => flatten(node) !== '已逾期'),
+  doneOverdueBody.slice(0, 200),
+);
+check(
+  '已完成的过期任务把日期写成“（已完成）”',
+  /截止 \d+月\d+日（已完成）/.test(doneOverdueBody) || doneOverdueBody.includes('（已完成）'),
+  doneOverdueBody.slice(0, 300),
+);
+
 /* 来源小提示：一条邮箱来的、一条 Canvas 来的，各自要标清楚。
    两条都要在屏上（Canvas 那条是已完成，所以要先打开「显示已完成」）。
    className 是 "ctm-tag ctm-source"，byClass 是精确匹配，这里得自己筛。 */
 const sourceChips = els((node) => String(node.props.className ?? '').split(' ').includes('ctm-source'));
-check('卡片上渲染出来源小标签', sourceChips.length === 2, sourceChips.map((node) => flatten(node)).join(','));
+check('卡片上渲染出来源小标签', sourceChips.length === 3, sourceChips.map((node) => flatten(node)).join(','));
 check(
   '邮箱来源标“邮箱”、Canvas 来源标“Canvas”',
   sourceChips.some((node) => flatten(node) === '邮箱' && node.props['data-source'] === 'mail') &&

@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { defaultConfig, loadConfig, maskSecrets, mergeSecrets, normalizeConfig, saveConfig, resolveDataDir, validateConfig, SECRET_PATHS, SAVED_SECRET, dbPathIn } from '../lib/config.js';
 import { openStore, isAvailable as sqliteAvailable } from '../lib/store.js';
 import { isTrustedWebRequest, createHandlers, Runtime, toPublicTask } from '../lib/index.js';
-import { HASH_FIELDS, detectChanges, hashItem, mergeDraft, pollOnce, snapshotToItem, submissionVerdict, syncCompletions, testSource } from '../lib/pipeline.js';
+import { HASH_FIELDS, detectChanges, hashItem, mergeDraft, pollOnce, snapshotToItem, submissionVerdict, syncCompletions, syncMailAgainstCanvas, pickCanvasCounterpart, titleSimilarity, testSource } from '../lib/pipeline.js';
 import { computeScore, examEvidence, matchesAny, ruleAssess, sortTasks, urgencyFromDue, extractDueDate, analyzeDueDate, stripQuotedText, classifyByContent, isRegistrationConfirmation, stripHtml, HIGH_URGENCY, HIGH_IMPORTANCE, TAG_WHITELIST } from '../lib/scoring.js';
 import { aiConfigured, batchSizeForBudget, buildSystemPrompt, buildUserPrompt, callChat, extractTasks, sanitizeDraft, scoreItems, testAi, stripCodeFence } from '../lib/llm.js';
 import { canonicalHash, parseDateMs, utcNowIso, truncate } from '../lib/util.js';
@@ -905,6 +905,46 @@ await checkAsync('pipeline: Canvas 与邮箱的抓取并发进行（两段延迟
   );
 });
 
+await checkAsync('pipeline: 一轮拉取里，邮箱任务会被 Canvas 的提交状态勾掉', async () => {
+  const dir = join(root, 'cross-in-poll');
+  const store = openStore(dbPathIn(dir));
+  store.upsertTask({
+    source: 'mail', external_id: 'imap:essay', category: 'reminder', title: '议论文作业（40%）要求提醒',
+    summary: '', course: '', due_at: iso(nowMs + DAY), due_kind: 'deadline', urgency: 3, importance: 3, score: 54,
+    tags: [], is_rule: false, urgency_reason: '', importance_reason: '', status: 'pending', raw_json: '',
+  });
+  const state = baseState({
+    assignments: {
+      1: [{
+        id: 11,
+        name: '议论文作业',
+        description: '<p>写一篇议论文</p>',
+        due_at: iso(nowMs + DAY),
+        points_possible: 40,
+        submission_types: ['online_upload'],
+        submission: { workflow_state: 'submitted', submitted_at: iso(nowMs) },
+      }],
+      2: [],
+    },
+    announcements: { 1: [], 2: [] },
+  });
+  const stats = await pollOnce({
+    dataDir: dir,
+    config: normalizeConfig({ canvas: { enabled: true, baseUrl: 'https://canvas.test', token: 't' } }),
+    store,
+    fetchImpl: makeFetch(state),
+    sleep: async () => {},
+    logger: null,
+    nowMs,
+  });
+  eq(store.getTaskByKey('mail', 'imap:essay').status, 'done', '邮件任务被 Canvas 的提交状态勾掉');
+  assert(stats.completed >= 1, `stats.completed 要计入这次自动完成：${stats.completed}`);
+  assert(
+    stats.warnings.some((text) => text.includes('Canvas 侧')),
+    `警告行要写清原因：${stats.warnings.join(' | ')}`,
+  );
+});
+
 await checkAsync('pipeline: Canvas 未配置时跳过并记错误，邮箱启用但缺配置也跳过', async () => {
   const dir = join(root, 'pipe-b');
   const config = normalizeConfig({ canvas: { enabled: true }, mail: { enabled: true, provider: 'imap' } });
@@ -1144,6 +1184,110 @@ check('pipeline: 邮件"报名成功"把旧报名提醒升级成参加，并勾�
   eq(again.promoted, 0, '已经升过级就不再动');
   eq(again.completed, 0, '已经勾过就不再计数');
   eq(store.getTaskByKey('mail', 'imap:recruit').title, '参加：Hall A ICFD 篮球招募活动', '标题不会被叠加前缀');
+});
+
+/* ------------------------------------- 邮件任务 ↔ Canvas 交叉对账（用户要求） */
+
+check('pipeline: 标题相似度（Dice bigram）中英文都算得动', () => {
+  assert(titleSimilarity('议论文作业要求提醒', '议论文作业') > 0.5, '中文子串要够像');
+  assert(titleSimilarity('Essay 1 reminder', 'Essay 1') > 0.5, '英文也够像');
+  assert(titleSimilarity('宿舍活动招募', 'Calculus Homework 3') < 0.2, '不相干的标题不该像');
+  eq(titleSimilarity('', 'Essay 1'), 0, '空标题给 0');
+});
+
+check('pipeline: pickCanvasCounterpart 的日期护栏', () => {
+  const near = [{ title: 'Essay 1', due_at: iso(nowMs + 2 * DAY) }];
+  const far = [{ title: 'Essay 1', due_at: iso(nowMs + 40 * DAY) }];
+  assert(pickCanvasCounterpart('Essay 1 reminder', iso(nowMs), near) !== null, '日期接近时接受');
+  eq(pickCanvasCounterpart('Essay 1 reminder', iso(nowMs), far), null, '日期差太远又不够像 → 拒绝');
+  const veryLike = [{ title: 'Essay 1 reminder reminder', due_at: iso(nowMs + 40 * DAY) }];
+  assert(pickCanvasCounterpart('Essay 1 reminder', iso(nowMs), veryLike) !== null, '非常像时可以忽略日期差');
+  eq(pickCanvasCounterpart('作业', iso(nowMs), near), null, '标题太短不配对');
+});
+
+check('pipeline: 邮件任务在 Canvas 已提交 → 自动勾掉；没交/不像/手动取消 → 一个都不动', () => {
+  const dir = join(root, 'mail-canvas-cross');
+  const store = openStore(dbPathIn(dir));
+  const mailSeed = (over) => ({
+    source: 'mail',
+    external_id: 'imap:x',
+    category: 'reminder',
+    title: 't',
+    summary: '',
+    course: '',
+    due_at: null,
+    due_kind: '',
+    urgency: 0,
+    importance: 1,
+    score: 8,
+    tags: [],
+    is_rule: false,
+    urgency_reason: '',
+    importance_reason: '',
+    status: 'pending',
+    raw_json: '',
+    ...over,
+  });
+  // 真机形状：邮件提醒"议论文作业（40%）要求提醒"，Canvas 侧作业名"议论文作业"
+  store.upsertTask(mailSeed({ external_id: 'imap:essay', title: '议论文作业（40%）要求提醒', due_at: iso(nowMs + DAY) }));
+  store.upsertTask(mailSeed({ external_id: 'imap:unsubmitted', title: 'GE1000 小组报告提交提醒', due_at: iso(nowMs + DAY) }));
+  store.upsertTask(mailSeed({ external_id: 'imap:unrelated', title: '宿舍活动招募', due_at: iso(nowMs + DAY) }));
+  store.upsertTask(mailSeed({ external_id: 'imap:user-cancelled', title: '议论文作业', due_at: iso(nowMs + DAY) }));
+  store.setStatus(store.getTaskByKey('mail', 'imap:user-cancelled').id, 'pending', { source: 'user' });
+
+  const canvasItems = [
+    {
+      source: 'canvas_assignment',
+      external_id: 'course:1:assignment:9',
+      payload: { name: '议论文作业', due_at: iso(nowMs + DAY), submission: { workflow_state: 'submitted', submitted_at: iso(nowMs) } },
+    },
+    {
+      source: 'canvas_assignment',
+      external_id: 'course:1:assignment:10',
+      payload: { name: 'GE1000 小组报告', due_at: iso(nowMs + DAY), submission: { workflow_state: 'unsubmitted' } },
+    },
+    {
+      source: 'canvas_assignment',
+      external_id: 'course:1:assignment:11',
+      payload: { name: 'Calculus Homework 3', due_at: iso(nowMs + DAY), submission: { workflow_state: 'submitted' } },
+    },
+  ];
+  const result = syncMailAgainstCanvas(store, canvasItems);
+  eq(result.completed, 1, '只有"已提交且对得上"的那一条被勾');
+  eq(store.getTaskByKey('mail', 'imap:essay').status, 'done', '议论文作业那条勾掉');
+  assert(
+    String(store.getTaskByKey('mail', 'imap:essay').status_note).includes('Canvas 侧已完成'),
+    String(store.getTaskByKey('mail', 'imap:essay').status_note),
+  );
+  eq(store.getTaskByKey('mail', 'imap:unsubmitted').status, 'pending', 'Canvas 没交 → 不动');
+  eq(store.getTaskByKey('mail', 'imap:unrelated').status, 'pending', '标题不像 → 不动');
+  eq(store.getTaskByKey('mail', 'imap:user-cancelled').status, 'pending', '手动取消过 → 永远不动');
+  assert(result.notes.some((note) => note.includes('Canvas 侧')), result.notes.join(' | '));
+
+  // 幂等：再跑一次不重复计数
+  eq(syncMailAgainstCanvas(store, canvasItems).completed, 0, '已经勾过就不再计数');
+});
+
+check('pipeline: 库里已完成的 Canvas 作业也能当证据（窗口外/用户自己勾的）', () => {
+  const dir = join(root, 'mail-canvas-store');
+  const store = openStore(dbPathIn(dir));
+  store.upsertTask({
+    source: 'mail', external_id: 'imap:lab', category: 'reminder', title: 'Lab 3 报告提交提醒',
+    summary: '', course: '', due_at: iso(nowMs + DAY), due_kind: '', urgency: 1, importance: 2, score: 18,
+    tags: [], is_rule: false, urgency_reason: '', importance_reason: '', status: 'pending', raw_json: '',
+  });
+  store.upsertTask({
+    source: 'canvas_assignment', external_id: 'course:2:assignment:77', category: 'assignment', title: 'Lab 3 报告',
+    summary: '', course: 'Course B', due_at: iso(nowMs + DAY), due_kind: 'deadline', urgency: 1, importance: 2, score: 18,
+    tags: [], is_rule: false, urgency_reason: '', importance_reason: '', status: 'pending', raw_json: '',
+  });
+  const canvasTask = store.getTaskByKey('canvas_assignment', 'course:2:assignment:77');
+  store.setStatus(canvasTask.id, 'done', { source: 'user' });
+
+  // 这一轮一条 Canvas 素材都没抓到（窗口外），只靠库里的状态也能对账
+  const result = syncMailAgainstCanvas(store, []);
+  eq(result.completed, 1, '库里的 Canvas 已完成也能勾掉对应邮件任务');
+  eq(store.getTaskByKey('mail', 'imap:lab').status, 'done', '邮件任务被勾掉');
 });
 
 /* ------------------------------------------- 判定升级时重算窗口外的老素材 */
