@@ -726,6 +726,28 @@ async function imapTests() {
   check('警告里带序号 1', failResult.warnings.some((w) => w.includes('1')), failResult.warnings);
   check('警告里带序号 2', failResult.warnings.some((w) => w.includes('2')), failResult.warnings);
 
+  // 日志脱敏：LOGIN 命令里的账号与授权码绝不能落进日志（宿主 debug 日志会写文件）
+  const logLines = [];
+  const captureLogger = {
+    debug: (line) => logLines.push(String(line)),
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  };
+  await fetchMail(IMAP_CONFIG, {
+    connect: createSocketFactory([], IMAP_ROUTES, 7),
+    now: clock.now,
+    logger: captureLogger,
+    sleep: clock.sleep,
+  });
+  const loginLines = logLines.filter((line) => line.includes('LOGIN'));
+  check('IMAP 日志里仍有 LOGIN 命令（方便排查）', loginLines.some((line) => line.includes('a1 LOGIN')), logLines.join(' | '));
+  check(
+    'IMAP 日志里不出现明文账号/授权码',
+    loginLines.length > 0 && !logLines.some((line) => line.includes('p@ss') || line.includes('stu')),
+    loginLines.join(' | '),
+  );
+
   // 连接死了不能再一封封磨：批量 FETCH 断连 → 只重连一次 → 逐封回退熔断
   const deadRoutes = [
     { test: /^a\d+ LOGIN /, reply: 'a1 OK LOGIN completed\r\n' },

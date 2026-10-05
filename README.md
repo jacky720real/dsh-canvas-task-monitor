@@ -123,6 +123,8 @@ rollback.bat
 
 **推荐用界面配**：左上侧边栏「待办」→ 设置页，四组（Canvas / 邮箱 / AI / 拉取与评分），三个「测试连接」按钮分别验 Canvas、邮箱、AI。密钥字段留空表示不修改（输入框里是占位字 `已保存（留空表示不修改）`，字段名旁边还会挂一个 `已保存` 小标）——**看起来是空的并不代表值丢了**，值仍在 `config.json` 里，保存时会原样沿用。
 
+「测试连接」测的是**眼前表单里的值**（没保存也带上；留空的密钥字段沿用盘上的真值）——所以换了授权码可以直接点测试，不必先保存。它的日志也会**脱敏**：IMAP 的 `LOGIN` 只留命令名（`IMAP → a1 LOGIN ***`），账号与授权码不会写进宿主日志（`%APPDATA%\DSH Desktop\logs\host\*.log`）。
+
 设置页顶部会写明「已读取配置：<路径>」（真读的是哪一份文件）以及宿主的配置体检结果；宿主万一没交出配置内容，页面会直接报出来并**禁用保存**，绝不会拿空表单把磁盘上的值覆盖掉。
 
 也可以直接编辑 `config.json`。注意 `dataDir` 只在 loader 配置里生效（本插件默认不写 loader config），所以想换目录请用环境变量 `CTM_DATA_DIR`：
@@ -224,7 +226,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File test\selftest.ps
 
 所有夹具都是**离线**的（假 HTTP 服务器、假 socket、假的 pnpm / dsh），不联网、不写真实 profile。
 
-当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 136 / `mail-check` 155 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
+当前项数：`manifest-check` 48 / `host-check` 65 / `canvas-check` 77 / `client-check` 137 / `mail-check` 157 / `sources-check` 126 / `cordis-check` 21（找不到真 cordis 就 SKIP），`selftest.ps1` 129 项。全部 `failed: 0`。
 
 本版这四条判定修正（转发头时间不是截止时间、分类按内容、不计入总成绩降权、每轮完成对账）**每条都做过伪造对照**：把修复逐项回退到旧行为后，对应断言必须变红——例如关掉「变更门禁之外的完成对账」就报 `pipeline: 只有提交状态变了（哈希不变）也会自动勾掉 → 期望 1，实际 0`；不剥转发头就报 `转发头的发送时间不得成为截止时间：2026-09-25T06:11:00.000Z`；关掉内容分类就报 `期望 "reminder"，实际 "activity"`；关掉降权就报 `期望 1，实际 4`；客户端丢掉 `due_kind` 则三条活动渲染断言一起变红。改这些逻辑前请先跑一遍这套对照。
 

@@ -1180,6 +1180,42 @@ await checkAsync('index: action 层覆盖面板用到的全部方法', async () 
   eq(unknown.ok, true, 'test_source 不抛错');
   eq(unknown.data.ok, false, '未知源 ok=false');
 
+  /* 面板里"填完就测"：草稿里的值必须被使用（真机上曾因为只传 source，改了授权码点测试永远测旧码）。 */
+  const seenTests = [];
+  const draftRuntime = new Runtime({
+    config: { dataDir: dir },
+    logger: null,
+    fetchImpl: async (url, init) => {
+      const headers = (init && init.headers) || {};
+      seenTests.push({ url: String(url), auth: String(headers.Authorization || headers.authorization || '') });
+      return jsonResponse({ id: 1, name: 'Draft User' });
+    },
+  });
+  const draftHandlers = createHandlers(draftRuntime);
+  const draftTest = await draftHandlers.test_source({
+    source: 'canvas',
+    config: { canvas: { enabled: true, baseUrl: 'https://draft.test', token: 'tok-draft', lookbackDays: 3 } },
+  });
+  eq(draftTest.ok, true, '带草稿的 test_source 不抛错');
+  eq(draftTest.data.ok, true, '草稿里的 canvas 连接成功');
+  eq(draftTest.data.usedDraft, true, '标记这次测试用的是草稿');
+  assert(seenTests.length > 0 && seenTests[0].url.includes('draft.test'), `草稿里的 baseUrl 必须被使用：${seenTests[0] && seenTests[0].url}`);
+  assert(seenTests[0].auth.includes('tok-draft'), `草稿里的 token 必须被使用：${seenTests[0] && seenTests[0].auth}`);
+
+  /* 掩码字段（浏览器只会回传 __SAVED__）要沿用盘上的真值。 */
+  seenTests.length = 0;
+  const maskedDraftTest = await draftHandlers.test_source({
+    source: 'canvas',
+    config: { canvas: { enabled: true, baseUrl: 'https://draft2.test', token: SAVED_SECRET, lookbackDays: 3 } },
+  });
+  eq(maskedDraftTest.data.ok, true, '带掩码的草稿也测得出');
+  assert(seenTests[0].auth.includes('tok-123'), `掩码字段必须沿用盘上的 token：${seenTests[0] && seenTests[0].auth}`);
+
+  /* 不带草稿时仍然测盘上的配置（老行为不能坏）。 */
+  seenTests.length = 0;
+  await draftHandlers.test_source({ source: 'canvas' });
+  assert(seenTests[0].url.includes('canvas.test'), `不带草稿时用盘上的 baseUrl：${seenTests[0] && seenTests[0].url}`);
+
   const empty = handlers.list_tasks({ limit: 10 });
   eq(empty.ok, true, 'list_tasks ok');
   deepEq(empty.data, [], '初始化时没有任务');

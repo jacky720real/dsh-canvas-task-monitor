@@ -628,9 +628,22 @@ check('保存后密文重新变回空输入框', byField('canvas.token')[0]?.pro
 check('保存后密文仍带“已保存”标记', byRole('secret-stored').length === 4, `${byRole('secret-stored').length} 个标记`);
 
 // 测试连接
+// 关键：先改一个**还没保存**的字段，测试请求里必须带着它——否则"改完就测"测的永远是盘上的旧值
+byField('canvas.baseUrl')[0].props.onChange({ target: { value: 'https://unsaved.example.edu' } });
+await settle();
 els((node) => node.type === 'button' && node.props['data-test'] === 'canvas')[0].props.onClick();
 await settle();
 check('测试连接调用 test_source', calls.some((call) => call.action === 'test_source' && call.params.source === 'canvas'));
+check(
+  '测试连接带上还没保存的表单值（否则测的是盘上的旧密钥）',
+  calls.some(
+    (call) =>
+      call.action === 'test_source' &&
+      call.params.source === 'canvas' &&
+      call.params.config?.canvas?.baseUrl === 'https://unsaved.example.edu',
+  ),
+  JSON.stringify(calls.filter((call) => call.action === 'test_source').map((call) => call.params.config?.canvas?.baseUrl)),
+);
 check('canvas 测试成功提示为绿色', els((node) => node.props.className === 'ctm-hint' && node.props['data-test-msg'] === 'canvas')[0]?.props['data-tone'] === 'ok');
 check('canvas 测试消息上屏', flatten(rootInst.tree).includes('连接成功：Canvas 可访问'));
 
